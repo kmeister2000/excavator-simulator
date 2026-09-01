@@ -1,0 +1,1368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#87b7e0">
+<title>Digger</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden; background:#87b7e0;
+    overscroll-behavior:none; touch-action:none;
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  #game { display:block; width:100%; height:100%; }
+
+  .pad { position:fixed; bottom:max(14px, env(safe-area-inset-bottom)); display:flex; gap:14px; z-index:10; }
+  #padL { left:max(14px, env(safe-area-inset-left)); }
+  #padR { right:max(14px, env(safe-area-inset-right)); }
+
+  .btn {
+    width:104px; height:104px; border-radius:26px; border:none;
+    display:flex; align-items:center; justify-content:center;
+    touch-action:none; cursor:pointer;
+    background:#ffcf2e;
+    box-shadow: 0 7px 0 #b8891a, 0 10px 18px rgba(0,0,0,.28);
+    transition: transform .05s, box-shadow .05s, filter .15s;
+    color:#3d2a05;
+  }
+  .btn svg { width:56px; height:56px; display:block; pointer-events:none; }
+  .btn.held { transform:translateY(6px); box-shadow: 0 1px 0 #b8891a, 0 3px 8px rgba(0,0,0,.28); filter:brightness(1.06); }
+
+  #dump {
+    position:fixed; bottom:max(14px, env(safe-area-inset-bottom));
+    left:50%; transform:translateX(-50%);
+    width:132px; height:78px; border-radius:24px; background:#8a8f96;
+    box-shadow:0 7px 0 #5c6067, 0 10px 18px rgba(0,0,0,.28);
+    z-index:10; opacity:.5;
+  }
+  #dump.ready { background:#ff8a3d; box-shadow:0 7px 0 #b25520, 0 10px 18px rgba(0,0,0,.28); opacity:1; }
+  #dump.held { transform:translateX(-50%) translateY(6px); box-shadow:0 1px 0 #b25520, 0 3px 8px rgba(0,0,0,.28); }
+
+  #horn {
+    position:fixed; top:max(14px, env(safe-area-inset-top));
+    right:max(14px, env(safe-area-inset-right));
+    width:82px; height:82px; border-radius:50%; background:#ff4d4d;
+    box-shadow:0 6px 0 #a82b2b, 0 8px 16px rgba(0,0,0,.28); z-index:10; color:#fff;
+  }
+  #horn svg { width:44px; height:44px; }
+  #horn.held { transform:translateY(5px); box-shadow:0 1px 0 #a82b2b, 0 3px 8px rgba(0,0,0,.28); }
+
+  @keyframes hint { 0%,100% { transform:scale(1); } 50% { transform:scale(1.09); } }
+  .hint { animation: hint 1.15s ease-in-out infinite; }
+
+  @media (max-height: 460px) {
+    .btn { width:86px; height:86px; border-radius:22px; }
+    .btn svg { width:46px; height:46px; }
+    #dump { width:112px; height:66px; }
+    #horn { width:70px; height:70px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div class="pad" id="padL">
+  <button class="btn" id="left" aria-label="drive left"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 3.5 7 12l8.5 8.5 2.6-2.6L12.2 12l5.9-5.9z"/></svg></button>
+  <button class="btn" id="right" aria-label="drive right"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 3.5 17 12l-8.5 8.5-2.6-2.6L11.8 12 5.9 6.1z"/></svg></button>
+</div>
+
+<div class="pad" id="padR">
+  <button class="btn" id="up" aria-label="arm up"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5 3.5 13l2.6 2.6L12 9.7l5.9 5.9 2.6-2.6z"/></svg></button>
+  <button class="btn" id="down" aria-label="arm down"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 19.5 20.5 11l-2.6-2.6L12 14.3 6.1 8.4 3.5 11z"/></svg></button>
+</div>
+
+<button id="dump" aria-label="dump"></button>
+<button id="horn" aria-label="horn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 2.3v2.1a7.6 7.6 0 0 1 0 15.2v2.1a9.7 9.7 0 0 0 0-19.4z"/></svg></button>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------- world */
+const WORLD_W = 2800, VIEW_H = 700;
+const GROUND_Y = 452, BEDROCK_Y = 662;
+const COLS = 560, COLW = WORLD_W / COLS;
+
+const h = new Float32Array(COLS);          // terrain surface y (canvas y-down)
+const disturbed = new Uint8Array(COLS);    // 1 = grass has been destroyed
+
+for (let i = 0; i < COLS; i++) {
+  const x = i * COLW;
+  let y = GROUND_Y
+        + Math.sin(x * 0.0016) * 7
+        + Math.sin(x * 0.0051 + 1.3) * 4;
+  // a starter mound to play with
+  const d = Math.abs(x - 1750);
+  if (d < 170) y -= Math.cos(d / 170 * Math.PI / 2) * 62;
+  h[i] = y;
+}
+
+const colAt = x => Math.max(0, Math.min(COLS - 1, Math.floor(x / COLW)));
+
+// The flatbed. Its deck and ramp are a scripted surface, not a simulation:
+// the machine reads its height straight off them, so it can tip over or get
+// stuck on neither.
+const TRUCK = {
+  cabX0: 56, cabX1: 148,
+  deckX0: 148, deckX1: 430,
+  deckY: GROUND_Y - 58,
+  rampX1: 600
+};
+const NO_DIG_X = TRUCK.rampX1 + 25;   // keep the ramp foot from being undermined
+
+// flatten the ground the truck parks on so the ramp meets it cleanly
+for (let i = 0; i <= colAt(NO_DIG_X + 30); i++) { h[i] = GROUND_Y; disturbed[i] = 0; }
+
+const h0 = Float32Array.from(h);   // original ground line, for the cut-away back wall
+
+
+const groundAt = x => h[colAt(x)];
+
+// height of the truck deck / ramp at x, or null if the truck isn't there
+function truckSurfaceAt(x) {
+  if (x < TRUCK.deckX0 - 10 || x > TRUCK.rampX1) return null;
+  if (x <= TRUCK.deckX1) return TRUCK.deckY;
+  const t = (x - TRUCK.deckX1) / (TRUCK.rampX1 - TRUCK.deckX1);
+  return TRUCK.deckY + t * (GROUND_Y - TRUCK.deckY);
+}
+
+// what the tracks and the bucket rest on: whichever is higher, dirt or truck
+function surfaceAt(x) {
+  const g = groundAt(x);
+  const t = truckSurfaceAt(x);
+  return t === null ? g : Math.min(t, g);
+}
+
+/* -------------------------------------------------------------- machine */
+const RIG = {
+  trackW: 122, trackH: 30,
+  houseW: 98,  houseH: 46,
+  pivot: { x: 34, y: -58 },
+  boom: 78, stick: 64, bucket: 34
+};
+// keyframed arm poses (absolute degrees, y-down so + is downward)
+const POSE_UP   = { boom: -62, stick: 28, bucket: 152 };
+const POSE_DOWN = { boom:   8, stick: 78, bucket: 128 };
+
+const ex = {
+  x: 290, y: GROUND_Y - 58, rot: 0,   // parked on the flatbed
+  arm: 0,            // 0 = raised, 1 = fully down
+  load: 0,           // dirt in bucket (area units)
+  dumpT: 0,          // 0..1 bucket tip-out
+  dumping: false,
+  tread: 0,
+  facing: 1
+};
+const CAPACITY = 2600;
+let prevTip = null, wasContact = false, wasPouring = false, pourWentToBed = false;
+
+// The dump truck. Fill its bed from the excavator; when it is full it hauls the
+// load off, tips it into a pile, and comes back empty, so the loop never ends.
+const DUMP_CAP = CAPACITY * 3;          // three bucket loads
+const DT_HOME = 900, DT_AWAY = 1400;
+const DTRUCK = {
+  x: DT_HOME, y: GROUND_Y,
+  fill: 0,        // 0..1
+  tip: 0,         // 0..1 bed raised
+  state: 'parked',
+  wait: 0
+};
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const D2R = Math.PI / 180;
+
+function armAngles(t) {
+  return {
+    boom:   lerp(POSE_UP.boom,   POSE_DOWN.boom,   t) * D2R,
+    stick:  lerp(POSE_UP.stick,  POSE_DOWN.stick,  t) * D2R,
+    bucket: (lerp(POSE_UP.bucket, POSE_DOWN.bucket, t) + ex.dumpT * 78) * D2R
+  };
+}
+
+// arm joint positions in machine-local space
+function armPoints(t) {
+  const a = armAngles(t), p = RIG.pivot;
+  const b  = { x: p.x + Math.cos(a.boom)  * RIG.boom,  y: p.y + Math.sin(a.boom)  * RIG.boom  };
+  const s  = { x: b.x + Math.cos(a.stick) * RIG.stick, y: b.y + Math.sin(a.stick) * RIG.stick };
+  const bt = { x: s.x + Math.cos(a.bucket)* RIG.bucket,y: s.y + Math.sin(a.bucket)* RIG.bucket};
+  return { pivot: p, boomTip: b, stickTip: s, tip: bt, ang: a };
+}
+
+// mirrors the way the sprite is drawn: translate -> rotate -> flip
+function toWorld(pt) {
+  const c = Math.cos(ex.rot), s = Math.sin(ex.rot);
+  const lx = pt.x * ex.facing, ly = pt.y;
+  return { x: ex.x + lx * c - ly * s, y: ex.y + lx * s + ly * c };
+}
+
+/* --------------------------------------------------------------- input */
+const keys = { left:false, right:false, up:false, down:false, dump:false };
+let lastInput = 0;
+
+function bindHold(el, name) {
+  const on  = e => { e.preventDefault(); keys[name] = true;  el.classList.add('held');
+                     lastInput = performance.now(); audioStart();
+                     try { el.setPointerCapture(e.pointerId); } catch (_) {} };
+  const off = e => { keys[name] = false; el.classList.remove('held'); };
+  el.addEventListener('pointerdown', on);
+  el.addEventListener('pointerup', off);
+  el.addEventListener('pointercancel', off);
+  el.addEventListener('lostpointercapture', off);
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+bindHold(document.getElementById('left'),  'left');
+bindHold(document.getElementById('right'), 'right');
+bindHold(document.getElementById('up'),    'up');
+bindHold(document.getElementById('down'),  'down');
+bindHold(document.getElementById('dump'),  'dump');
+
+const hornEl = document.getElementById('horn');
+hornEl.addEventListener('pointerdown', e => {
+  e.preventDefault(); audioStart(); playHorn();
+  hornEl.classList.add('held'); lastInput = performance.now();
+});
+const hornOff = () => hornEl.classList.remove('held');
+hornEl.addEventListener('pointerup', hornOff);
+hornEl.addEventListener('pointercancel', hornOff);
+
+const KEYMAP = { ArrowLeft:'left', ArrowRight:'right', ArrowUp:'up', ArrowDown:'down', ' ':'dump' };
+addEventListener('keydown', e => {
+  if (e.key === 'h') { audioStart(); playHorn(); return; }
+  const k = KEYMAP[e.key]; if (!k) return;
+  e.preventDefault(); keys[k] = true; lastInput = performance.now(); audioStart();
+});
+addEventListener('keyup', e => { const k = KEYMAP[e.key]; if (k) keys[k] = false; });
+
+// keep little fingers from navigating away
+addEventListener('gesturestart', e => e.preventDefault());
+addEventListener('touchmove', e => e.preventDefault(), { passive:false });
+addEventListener('dblclick', e => e.preventDefault());
+
+/* --------------------------------------------------------------- audio */
+let AC = null, engine = null, hyd = null, scrape = null, pour = null, noiseBuf = null;
+
+function audioStart() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+
+  const n = AC.sampleRate * 1.2, buf = AC.createBuffer(1, n, AC.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  noiseBuf = buf;
+
+  // engine: two detuned saws through a lowpass
+  const g = AC.createGain(); g.gain.value = 0.0;
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 340;
+  const o1 = AC.createOscillator(), o2 = AC.createOscillator();
+  o1.type = 'sawtooth'; o2.type = 'sawtooth';
+  o1.frequency.value = 47; o2.frequency.value = 70.5;
+  o1.connect(lp); o2.connect(lp); lp.connect(g); g.connect(AC.destination);
+  o1.start(); o2.start();
+  engine = { g, o1, o2, lp };
+
+  // hydraulic ram: a resonant whine plus a breathy hiss
+  const hg = AC.createGain(); hg.gain.value = 0;
+  const hsaw = AC.createOscillator(); hsaw.type = 'sawtooth'; hsaw.frequency.value = 150;
+  const hlp = AC.createBiquadFilter(); hlp.type = 'lowpass'; hlp.frequency.value = 620; hlp.Q.value = 9;
+  hsaw.connect(hlp); hlp.connect(hg);
+
+  const hn = AC.createBufferSource(); hn.buffer = noiseBuf; hn.loop = true;
+  const hnf = AC.createBiquadFilter(); hnf.type = 'bandpass'; hnf.frequency.value = 1500; hnf.Q.value = 1.1;
+  const hng = AC.createGain(); hng.gain.value = 0.2;
+  hn.connect(hnf); hnf.connect(hng); hng.connect(hg);
+
+  hg.connect(AC.destination);
+  hsaw.start(); hn.start();
+  hyd = { g: hg, o: hsaw, lp: hlp };
+
+  // bucket grinding along the ground
+  const cg = AC.createGain(); cg.gain.value = 0;
+  const cn = AC.createBufferSource(); cn.buffer = noiseBuf; cn.loop = true;
+  const cf = AC.createBiquadFilter(); cf.type = 'bandpass'; cf.frequency.value = 1400; cf.Q.value = 0.7;
+  cn.connect(cf); cf.connect(cg); cg.connect(AC.destination);
+  cn.start();
+  scrape = { g: cg, f: cf };
+
+  // dirt rushing out of the bucket
+  const pg = AC.createGain(); pg.gain.value = 0;
+  const pn = AC.createBufferSource(); pn.buffer = noiseBuf; pn.loop = true;
+  const pf = AC.createBiquadFilter(); pf.type = 'bandpass'; pf.frequency.value = 900; pf.Q.value = 0.5;
+  const pl = AC.createBiquadFilter(); pl.type = 'lowpass'; pl.frequency.value = 2600;
+  pn.connect(pf); pf.connect(pl); pl.connect(pg); pg.connect(AC.destination);
+  pn.start();
+  pour = { g: pg, f: pf };
+}
+
+function noiseBurst(dur, freq, gain, type) {
+  if (!AC) return;
+  const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+  const f = AC.createBiquadFilter(); f.type = type || 'bandpass'; f.frequency.value = freq; f.Q.value = 1.2;
+  const g = AC.createGain();
+  const t = AC.currentTime;
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f); f.connect(g); g.connect(AC.destination);
+  s.start(t); s.stop(t + dur + 0.02);
+}
+
+let lastCrunch = 0;
+function playCrunch() {
+  if (!AC || AC.currentTime - lastCrunch < 0.085) return;
+  lastCrunch = AC.currentTime;
+  noiseBurst(0.16, 700 + Math.random() * 900, 0.16);
+}
+
+function playHorn() {
+  if (!AC) return;
+  const t = AC.currentTime, g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+  g.gain.setValueAtTime(0.22, t + 0.42);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.58);
+  g.connect(AC.destination);
+  [312, 396].forEach(f => {
+    const o = AC.createOscillator(); o.type = 'square'; o.frequency.value = f;
+    o.connect(g); o.start(t); o.stop(t + 0.6);
+  });
+}
+
+let beepUntil = 0;
+function reverseBeep() {
+  if (!AC || AC.currentTime < beepUntil) return;
+  beepUntil = AC.currentTime + 0.62;
+  const t = AC.currentTime, g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.13, t + 0.01);
+  g.gain.setValueAtTime(0.13, t + 0.18);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+  const o = AC.createOscillator(); o.type = 'square'; o.frequency.value = 1180;
+  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + 0.26);
+}
+
+let lastThud = 0;
+function playThud() {
+  if (!AC || AC.currentTime - lastThud < 0.28) return;
+  lastThud = AC.currentTime;
+  const t = AC.currentTime, g = AC.createGain();
+  g.gain.setValueAtTime(0.3, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+  const o = AC.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(130, t);
+  o.frequency.exponentialRampToValueAtTime(46, t + 0.2);
+  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + 0.26);
+  noiseBurst(0.2, 430, 0.22, 'lowpass');
+}
+
+let lastClunk = 0;
+function playClunk() {
+  if (!AC || AC.currentTime - lastClunk < 0.35) return;
+  lastClunk = AC.currentTime;
+  const t = AC.currentTime, g = AC.createGain();
+  g.gain.setValueAtTime(0.17, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+  const o = AC.createOscillator(); o.type = 'triangle';
+  o.frequency.setValueAtTime(230, t);
+  o.frequency.exponentialRampToValueAtTime(88, t + 0.12);
+  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + 0.15);
+  noiseBurst(0.09, 2300, 0.08);
+}
+
+// dirt landing in a steel bed rather than on soft ground
+function playBedClang() {
+  if (!AC) return;
+  const t = AC.currentTime, g = AC.createGain();
+  g.gain.setValueAtTime(0.16, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+  g.connect(AC.destination);
+  [318, 487, 733].forEach((f, i) => {                 // inharmonic = metallic
+    const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+    const og = AC.createGain(); og.gain.value = 0.5 / (i + 1);
+    o.connect(og); og.connect(g); o.start(t); o.stop(t + 0.52);
+  });
+  noiseBurst(0.3, 520, 0.16, 'lowpass');
+}
+
+// two low honks as the loaded truck pulls away
+function playTruckHorn() {
+  if (!AC) return;
+  const t = AC.currentTime;
+  [0, 0.26].forEach(off => {
+    const g = AC.createGain();
+    g.gain.setValueAtTime(0.0001, t + off);
+    g.gain.exponentialRampToValueAtTime(0.18, t + off + 0.02);
+    g.gain.setValueAtTime(0.18, t + off + 0.15);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + off + 0.22);
+    g.connect(AC.destination);
+    [180, 226].forEach(f => {
+      const o = AC.createOscillator(); o.type = 'square'; o.frequency.value = f;
+      o.connect(g); o.start(t + off); o.stop(t + off + 0.24);
+    });
+  });
+}
+
+function playTipRumble() { noiseBurst(1.1, 300, 0.22, 'lowpass'); }
+
+// the bucket rolling open: hydraulic hiss plus a bit of metal
+function playTipOut() {
+  if (!AC) return;
+  const t = AC.currentTime;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.085, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+  const n = AC.createBufferSource(); n.buffer = noiseBuf; n.loop = true;
+  const f = AC.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.6;
+  f.frequency.setValueAtTime(2400, t);
+  f.frequency.exponentialRampToValueAtTime(880, t + 0.32);
+  n.connect(f); f.connect(g); g.connect(AC.destination);
+  n.start(t); n.stop(t + 0.36);
+
+  const cg = AC.createGain();
+  cg.gain.setValueAtTime(0.05, t);
+  cg.gain.exponentialRampToValueAtTime(0.0001, t + 0.19);
+  const o = AC.createOscillator(); o.type = 'square';
+  o.frequency.setValueAtTime(430, t);
+  o.frequency.exponentialRampToValueAtTime(255, t + 0.17);
+  o.connect(cg); cg.connect(AC.destination); o.start(t); o.stop(t + 0.21);
+}
+
+// the last of the load landing and the pile settling
+function playSettle() {
+  if (!AC) return;
+  const t = AC.currentTime, g = AC.createGain();
+  g.gain.setValueAtTime(0.24, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+  const o = AC.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(98, t);
+  o.frequency.exponentialRampToValueAtTime(40, t + 0.28);
+  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + 0.34);
+  noiseBurst(0.3, 600, 0.15, 'lowpass');
+}
+
+/* ---------------------------------------------------------------- exhaust */
+// Puffs live in world coordinates so they drift free of the machine once out
+// of the stack. The stack tip is local (-32, -96); toWorld already applies the
+// machine's facing, so the local x is passed through unmirrored.
+const puffs = [];
+let puffTimer = 0;
+
+function emitPuff() {
+  const p = toWorld({ x: -32, y: -96 });
+  puffs.push({
+    x: p.x + (Math.random() - 0.5) * 3,
+    y: p.y + (Math.random() - 0.5) * 3,
+    vx: (Math.random() - 0.5) * 10 - ex.facing * 5,
+    vy: -30 - Math.random() * 16,
+    r: 2.5 + Math.random() * 2,
+    life: 0,
+    max: 1.0 + Math.random() * 0.6
+  });
+}
+
+function updatePuffs(dt, effort) {
+  if (effort > 0) {
+    puffTimer -= dt;
+    let guard = 0;
+    while (puffTimer <= 0 && guard++ < 8) { emitPuff(); puffTimer += 0.07 / effort; }
+  } else {
+    puffTimer = 0;
+  }
+  for (let i = puffs.length - 1; i >= 0; i--) {
+    const p = puffs[i];
+    p.life += dt;
+    if (p.life >= p.max) { puffs.splice(i, 1); continue; }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy *= 1 - 0.9 * dt;        // rise slows
+    p.vx *= 1 - 1.2 * dt;
+    p.r  += 12 * dt;             // and it spreads out
+  }
+}
+
+function drawPuffs() {
+  for (const p of puffs) {
+    const t = p.life / p.max;
+    const g = Math.round(90 + t * 90);          // darkens to light as it thins
+    ctx.globalAlpha = (1 - t) * (1 - t) * 0.5;
+    ctx.fillStyle = `rgb(${g},${g},${g})`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* --------------------------------------------------------------- physics */
+const REPOSE = 3.4;   // max height difference between neighbouring columns
+
+function relax(passes) {
+  for (let p = 0; p < passes; p++) {
+    const fwd = (p & 1) === 0;
+    const a = fwd ? 0 : COLS - 2, b = fwd ? COLS - 1 : 0, st = fwd ? 1 : -1;
+    for (let i = a; fwd ? i < b : i >= 0; i += st) {
+      const j = i + 1;
+      if (j >= COLS) continue;
+      const diff = h[i] - h[j];
+      if (diff > REPOSE) {                     // column j is too tall
+        const t = (diff - REPOSE) * 0.3;
+        h[j] += t; h[i] -= t;
+        if (t > 0.05) { disturbed[i] = 1; disturbed[j] = 1; }
+      } else if (-diff > REPOSE) {             // column i is too tall
+        const t = (-diff - REPOSE) * 0.3;
+        h[i] += t; h[j] -= t;
+        if (t > 0.05) { disturbed[i] = 1; disturbed[j] = 1; }
+      }
+    }
+  }
+}
+
+const DIG_R = 26;
+
+function dig(tip, dt) {
+  if (ex.load >= CAPACITY) return false;
+  const i0 = colAt(tip.x - DIG_R), i1 = colAt(tip.x + DIG_R);
+  const rate = 300 * dt;
+  let removed = 0;
+  for (let i = i0; i <= i1; i++) {
+    if ((i + 0.5) * COLW < NO_DIG_X) continue;     // the truck's ground is off limits
+    const dx = (i + 0.5) * COLW - tip.x;
+    const depth = Math.sqrt(Math.max(0, DIG_R * DIG_R - dx * dx)) * 0.55;
+    const target = Math.min(tip.y + depth, BEDROCK_Y);
+    if (target > h[i]) {
+      const nh = Math.min(target, h[i] + rate);
+      removed += (nh - h[i]) * COLW;
+      h[i] = nh;
+      disturbed[i] = 1;
+    }
+  }
+  if (removed > 0) { ex.load = Math.min(CAPACITY, ex.load + removed); relax(4); return true; }
+  return false;
+}
+
+function drop(tip, amount, spread) {
+  const R = spread || 22;
+  const dx = Math.max(tip.x, NO_DIG_X + R);        // never pile dirt on the ramp
+  const i0 = colAt(dx - R), i1 = colAt(dx + R);
+  const n = i1 - i0 + 1;
+  if (n <= 0) return;
+  const per = amount / (n * COLW);
+  for (let i = i0; i <= i1; i++) { h[i] -= per; disturbed[i] = 1; }
+  relax(6);
+}
+
+function settleMachine(dt) {
+  const half = RIG.trackW / 2 - 6;
+
+  // tilt: centroids of the two halves are (6 + half) apart, so a ramp reads at
+  // its true angle rather than a flattened approximation
+  let fSum = 0, rSum = 0, n = 0;
+  for (let d = 6; d <= half; d += 6) {
+    fSum += surfaceAt(ex.x + d); rSum += surfaceAt(ex.x - d); n++;
+  }
+  const targetRot = Math.max(-0.42, Math.min(0.42,
+    Math.atan2(fSum / n - rSum / n, 6 + half)));
+
+  // height: rest the underside on the highest point it actually touches,
+  // measured along the tilt - otherwise the machine floats on a slope
+  const sr = Math.sin(targetRot);
+  let top = 1e9;
+  for (let d = -half; d <= half; d += 6) {
+    const y = surfaceAt(ex.x + d) - d * sr;
+    if (y < top) top = y;
+  }
+  const targetY = top;
+  const k = 1 - Math.pow(0.0008, dt);
+  ex.y   = lerp(ex.y, targetY, k);
+  ex.rot = lerp(ex.rot, targetRot, k);
+}
+
+/* ---------------------------------------------------------------- update */
+function update(dt) {
+  // drive
+  let drive = 0;
+  if (keys.left)  drive -= 1;
+  if (keys.right) drive += 1;
+  if (drive !== 0) {
+    ex.facing = drive;
+    ex.x = Math.max(TRUCK.deckX0 + 62, Math.min(WORLD_W - 140, ex.x + drive * 128 * dt));
+    ex.tread += drive * 128 * dt;
+    if (drive < 0) reverseBeep();
+  }
+
+  // arm
+  const armMove = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+  if (armMove !== 0) {
+    const was = ex.arm;
+    ex.arm = Math.max(0, Math.min(1, ex.arm + armMove * 0.62 * dt));
+    if (ex.arm !== was && (ex.arm === 0 || ex.arm === 1)) playClunk();
+  }
+
+  // dump
+  let pourRate = 0;
+  if (keys.dump && ex.load > 0 && !ex.dumping) { ex.dumping = true; playTipOut(); }
+  if (ex.dumping) {
+    ex.dumpT = Math.min(1, ex.dumpT + dt * 3.2);
+    if (ex.dumpT > 0.35 && ex.load > 0) {
+      const give = Math.min(ex.load, CAPACITY * 2.2 * dt);
+      ex.load -= give;
+      pourRate = give / dt;
+      const tip = toWorld(armPoints(ex.arm).tip);
+      if (bucketOverBed(tip)) {
+        DTRUCK.fill = Math.min(1, DTRUCK.fill + give / DUMP_CAP);
+        pourWentToBed = true;
+      } else {
+        drop(tip, give);
+      }
+    }
+    if (ex.load <= 0.5 && ex.dumpT >= 1) ex.dumping = false;
+  } else {
+    ex.dumpT = Math.max(0, ex.dumpT - dt * 3.2);
+  }
+  // the instant the last of it leaves the bucket, the load lands
+  if (wasPouring && pourRate === 0) {
+    if (pourWentToBed) playBedClang(); else playSettle();
+    pourWentToBed = false;
+  }
+  wasPouring = pourRate > 0;
+
+  updateDumpTruck(dt);
+
+  settleMachine(dt);
+
+  // where the bucket is, and whether it is touching dirt.
+  // hysteresis matters here: cutting drops the surface away from the bucket,
+  // so a single threshold flickers and machine-guns the landing thud.
+  const tip = toWorld(armPoints(ex.arm).tip);
+  const depth = tip.y - surfaceAt(tip.x);           // > 0 means below the surface
+  const contact = wasContact ? depth > -15 : depth > -3;
+  const tipSpeed = prevTip
+    ? Math.hypot(tip.x - prevTip.x, tip.y - prevTip.y) / Math.max(dt, 1e-4)
+    : 0;
+  if (contact && !wasContact && tipSpeed > 20) playThud();   // the moment it lands
+  wasContact = contact;
+  prevTip = tip;
+
+  // digging happens whenever the bucket is pushed into the ground
+  let cutting = false;
+  if (armMove > 0 && !ex.dumping && contact) cutting = dig(tip, dt);
+  if (cutting) playCrunch();
+
+  // how hard the machine is working: drives both the engine note and the smoke
+  const effort = (drive !== 0 ? 1 : 0) * 0.55 + (armMove !== 0 ? 1 : 0) * 0.45;
+  updatePuffs(dt, effort);
+
+  // audio mix
+  if (AC && engine) {
+    const load = effort;
+    const tgt = 0.05 + load * 0.05;
+    engine.g.gain.setTargetAtTime(tgt, AC.currentTime, 0.12);
+    engine.o1.frequency.setTargetAtTime(47 + load * 26, AC.currentTime, 0.16);
+    engine.o2.frequency.setTargetAtTime(70.5 + load * 38, AC.currentTime, 0.16);
+    engine.lp.frequency.setTargetAtTime(340 + load * 420, AC.currentTime, 0.16);
+    // hydraulics: louder and lower going down, tighter coming up
+    const moving = armMove !== 0;
+    hyd.g.gain.setTargetAtTime(moving ? 0.09 : 0, AC.currentTime, moving ? 0.025 : 0.08);
+    hyd.o.frequency.setTargetAtTime(148 + ex.arm * 84 + (armMove < 0 ? 46 : 0), AC.currentTime, 0.07);
+    hyd.lp.frequency.setTargetAtTime(520 + ex.arm * 340, AC.currentTime, 0.07);
+
+    // grind: only while the bucket is on the ground, louder the faster it moves
+    const grind = contact ? Math.min(1, tipSpeed / 85) : 0;
+    scrape.g.gain.setTargetAtTime(grind * 0.12, AC.currentTime, 0.045);
+    scrape.f.frequency.setTargetAtTime(1050 + grind * 1500, AC.currentTime, 0.06);
+
+    // pour: tracks the real rate of dirt leaving, and drops in pitch as it empties
+    const flow = Math.min(1, pourRate / (CAPACITY * 2.2));
+    pour.g.gain.setTargetAtTime(flow * 0.17, AC.currentTime, 0.03);
+    pour.f.frequency.setTargetAtTime(620 + (ex.load / CAPACITY) * 1300, AC.currentTime, 0.05);
+  }
+
+  document.getElementById('dump').classList.toggle('ready', ex.load > 40);
+
+  // idle hint
+  const idle = performance.now() - lastInput > 6000;
+  ['left','right','up','down'].forEach(id =>
+    document.getElementById(id).classList.toggle('hint', idle));
+}
+
+/* ----------------------------------------------------------------- render */
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+let camX = 0, VW = 0, scale = 1;
+
+function resize() {
+  const w = innerWidth, hh = innerHeight, dpr = Math.min(devicePixelRatio || 1, 2);
+  cv.width = w * dpr; cv.height = hh * dpr;
+  cv.style.width = w + 'px'; cv.style.height = hh + 'px';
+  scale = hh / VIEW_H;
+  VW = w / scale;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize);
+addEventListener('orientationchange', () => setTimeout(resize, 120));
+resize();
+
+const BANDS = [
+  { y0: 0,   y1: 500, c: '#9a6b41' },
+  { y0: 500, y1: 556, c: '#87593a' },
+  { y0: 556, y1: 614, c: '#a8632c' },
+  { y0: 614, y1: 720, c: '#6f6a63' }
+];
+
+const BANDS_DARK = BANDS.map(b => ({ y0: b.y0, y1: b.y1, c: shade(b.c, 0.62) }));
+
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.round(((n >> 16) & 255) * k),
+        g = Math.round(((n >> 8) & 255) * k),
+        b = Math.round((n & 255) * k);
+  return `rgb(${r},${g},${b})`;
+}
+
+const CLOUDS = [[190,88,1],[560,54,.8],[940,116,1.2],[1330,70,.9],[1700,100,1],
+                [2080,58,1.1],[2460,124,.85],[2840,82,1],[3220,64,1.15]];
+const TREES  = [300, 1120, 2260, 2660];
+
+// --- parallax -------------------------------------------------------------
+// A layer with factor f scrolls at f times world speed (0 = infinitely far,
+// 1 = moves with the ground). The canvas is already translated by -camX, so an
+// anchor ax must be drawn at ax + camX*(1-f) to end up scrolling at rate f.
+const par = (ax, f) => ax + camX * (1 - f);
+
+// deterministic placement, so scenery never shuffles between frames
+function rnd(i) {
+  const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+const tri = u => 1 - 2 * Math.abs(u - Math.floor(u) - 0.5);   // 0..1 triangle
+
+// builds a closed silhouette from a height function sampled across the view
+function ridgePath(f, fn) {
+  ctx.beginPath();
+  ctx.moveTo(camX - 30, VIEW_H);
+  for (let x = camX - 30; x <= camX + VW + 30; x += 8) {
+    ctx.lineTo(x, fn(x - camX * (1 - f)));
+  }
+  ctx.lineTo(camX + VW + 30, VIEW_H);
+  ctx.closePath();
+}
+
+function snowCap(f, fn, lineY) {
+  ctx.save();
+  ridgePath(f, fn);
+  ctx.clip();
+  ctx.fillStyle = '#eef4fb';
+  ctx.fillRect(camX - 30, 0, VW + 60, lineY);
+  ctx.restore();
+}
+
+const BACK_RANGE  = p => 396 - 236 * (0.24 + 0.76 * tri(p * 0.0019))
+                             * (0.66 + 0.34 * Math.sin(p * 0.00052 + 2.1));
+const FRONT_RANGE = p => 408 - 178 * (0.24 + 0.76 * tri(p * 0.0027 + 0.37))
+                             * (0.64 + 0.36 * Math.sin(p * 0.0009));
+const FAR_HILLS   = p => 404 - 38 * (0.5 + 0.5 * Math.sin(p * 0.0021))
+                             - 12 * Math.sin(p * 0.0057 + 1.7);
+
+const RIVER_Y = 416;
+
+function drawMountains() {
+  ridgePath(0.05, BACK_RANGE);  ctx.fillStyle = '#a6bad2'; ctx.fill();
+  snowCap(0.05, BACK_RANGE, 272);
+  ridgePath(0.10, FRONT_RANGE); ctx.fillStyle = '#7f97ba'; ctx.fill();
+  snowCap(0.10, FRONT_RANGE, 306);
+}
+
+function drawClouds() {
+  ctx.fillStyle = 'rgba(255,255,255,.92)';
+  for (const [cx, cy, sc] of CLOUDS) {
+    const x = par(cx, 0.18);
+    if (x < camX - 140 || x > camX + VW + 140) continue;
+    ctx.beginPath();
+    ctx.arc(x, cy, 26 * sc, 0, 7);
+    ctx.arc(x + 30 * sc, cy - 10 * sc, 32 * sc, 0, 7);
+    ctx.arc(x + 64 * sc, cy + 2 * sc, 24 * sc, 0, 7);
+    ctx.fill();
+  }
+}
+
+function drawBirds() {
+  ctx.strokeStyle = 'rgba(70,90,110,.55)';
+  ctx.lineWidth = 2; ctx.lineCap = 'round';
+  for (let i = 0; i < 9; i++) {
+    const x = par(i * 340 + rnd(i) * 200, 0.22);
+    if (x < camX - 40 || x > camX + VW + 40) continue;
+    const y = 120 + rnd(i + 4) * 130, w = 5 + rnd(i + 9) * 4;
+    ctx.beginPath();
+    ctx.moveTo(x - w * 2, y); ctx.quadraticCurveTo(x - w, y - w, x, y);
+    ctx.quadraticCurveTo(x + w, y - w, x + w * 2, y);
+    ctx.stroke();
+  }
+}
+
+function drawHouse(x, gy, i) {
+  const w = 32 + rnd(i) * 22, hh = 26 + rnd(i + 7) * 16, y = gy - hh;
+  const wall = ['#f3e5cb', '#e7d2af', '#f6ded3', '#dfe7d9', '#eadfc4'][i % 5];
+  const roof = ['#a5503f', '#8d4436', '#6d4a3a', '#9f5a45', '#7c4740'][i % 5];
+
+  ctx.fillStyle = wall;
+  ctx.fillRect(x - w / 2, y, w, hh);
+  ctx.fillStyle = roof;                                   // pitched roof
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2 - 5, y);
+  ctx.lineTo(x, y - (13 + rnd(i + 3) * 11));
+  ctx.lineTo(x + w / 2 + 5, y);
+  ctx.closePath(); ctx.fill();
+  ctx.fillRect(x + w * 0.2, y - 17, 5, 11);               // chimney
+  ctx.fillStyle = '#7d5c3c';                              // door
+  ctx.fillRect(x - 4, gy - hh * 0.5, 8, hh * 0.5);
+  ctx.fillStyle = '#ffe9a8';                              // lit windows
+  ctx.fillRect(x - w / 2 + 5, y + 6, 7, 7);
+  ctx.fillRect(x + w / 2 - 12, y + 6, 7, 7);
+}
+
+function drawChurch(x, gy) {
+  ctx.fillStyle = '#f0ead9';
+  ctx.fillRect(x - 20, gy - 42, 40, 42);
+  ctx.fillStyle = '#6d4a3a';
+  ctx.beginPath();
+  ctx.moveTo(x - 25, gy - 42); ctx.lineTo(x, gy - 56); ctx.lineTo(x + 25, gy - 42);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#f0ead9';                               // tower
+  ctx.fillRect(x - 8, gy - 78, 16, 40);
+  ctx.fillStyle = '#6d4a3a';                               // spire
+  ctx.beginPath();
+  ctx.moveTo(x - 11, gy - 78); ctx.lineTo(x, gy - 102); ctx.lineTo(x + 11, gy - 78);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#e8c34a';
+  ctx.fillRect(x - 1.5, gy - 110, 3, 9);                   // cross
+  ctx.fillRect(x - 5, gy - 107, 10, 3);
+  ctx.fillStyle = '#ffe9a8';
+  ctx.fillRect(x - 5, gy - 34, 10, 12);
+}
+
+function drawFarTree(x, gy, i) {
+  const hh = 20 + rnd(i) * 12;
+  ctx.fillStyle = '#6b4a30';
+  ctx.fillRect(x - 2.5, gy - hh, 5, hh);
+  ctx.fillStyle = '#5d9450';
+  ctx.beginPath();
+  ctx.arc(x, gy - hh - 7, 13, 0, 7);
+  ctx.arc(x - 10, gy - hh + 2, 9, 0, 7);
+  ctx.arc(x + 10, gy - hh + 2, 9, 0, 7);
+  ctx.fill();
+}
+
+function drawVillage() {
+  const gy = RIVER_Y - 2;
+  for (let i = 0; i < 18; i++) {
+    const x = par(i * 148 + rnd(i) * 60, 0.30);
+    if (x < camX - 120 || x > camX + VW + 120) continue;
+    if (i % 7 === 3)      drawChurch(x, gy);
+    else if (i % 5 === 1) drawFarTree(x, gy, i);
+    else                  drawHouse(x, gy, i);
+  }
+}
+
+function drawRiver() {
+  const top = RIVER_Y;
+  ctx.fillStyle = '#6f9c66';                               // far bank
+  ctx.fillRect(camX - 30, top - 5, VW + 60, 11);
+
+  const g = ctx.createLinearGradient(0, top + 6, 0, GROUND_Y + 14);
+  g.addColorStop(0, '#63aeda'); g.addColorStop(1, '#3a78ae');
+  ctx.fillStyle = g;
+  ctx.fillRect(camX - 30, top + 6, VW + 60, GROUND_Y + 14 - top);
+
+  ctx.fillStyle = 'rgba(255,255,255,.4)';                  // ripples
+  for (let i = 0; i < 90; i++) {
+    const x = par(i * 84 + rnd(i) * 60, 0.42);
+    if (x < camX - 40 || x > camX + VW + 40) continue;
+    ctx.fillRect(x, top + 12 + rnd(i + 13) * 22, 10 + rnd(i + 5) * 16, 2);
+  }
+}
+
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
+  g.addColorStop(0, '#5fa8e0'); g.addColorStop(1, '#bfe0f2');
+  ctx.fillStyle = g;
+  ctx.fillRect(camX - 10, 0, VW + 20, VIEW_H);
+
+  ctx.fillStyle = '#ffe27a';
+  ctx.beginPath(); ctx.arc(par(240, 0.02), 84, 40, 0, 7); ctx.fill();
+
+  drawMountains();
+  drawClouds();
+  drawBirds();
+
+  ridgePath(0.20, FAR_HILLS);
+  ctx.fillStyle = '#7ea87a'; ctx.fill();
+
+  drawVillage();
+  drawRiver();
+}
+
+function terrainPath(arr) {
+  const i0 = Math.max(0, colAt(camX) - 2), i1 = Math.min(COLS - 1, colAt(camX + VW) + 2);
+  ctx.beginPath();
+  ctx.moveTo(i0 * COLW, VIEW_H + 10);
+  for (let i = i0; i <= i1; i++) ctx.lineTo(i * COLW, arr[i]);
+  ctx.lineTo(i1 * COLW, VIEW_H + 10);
+  ctx.closePath();
+  return [i0, i1];
+}
+
+// the wall of earth *behind* the machine, so an open hole reads as a
+// cut-away through the ground rather than a window onto the sky
+const back = new Float32Array(COLS);
+
+function drawBackWall() {
+  for (let i = 0; i < COLS; i++) back[i] = Math.min(h0[i], h[i]);
+  ctx.save();
+  terrainPath(back);
+  ctx.clip();
+  for (const b of BANDS_DARK) { ctx.fillStyle = b.c; ctx.fillRect(camX - 10, b.y0, VW + 20, b.y1 - b.y0); }
+  ctx.restore();
+}
+
+function drawTerrain() {
+  ctx.save();
+  const [i0, i1] = terrainPath(h);
+  ctx.clip();
+  for (const b of BANDS) { ctx.fillStyle = b.c; ctx.fillRect(camX - 10, b.y0, VW + 20, b.y1 - b.y0); }
+  // pebbles for texture
+  ctx.fillStyle = 'rgba(0,0,0,.09)';
+  for (let i = i0; i <= i1; i += 7) {
+    const x = i * COLW, y = h[i] + 26 + ((i * 37) % 90);
+    ctx.fillRect(x, y, 5, 4);
+  }
+  ctx.restore();
+
+  // grass only where the ground is untouched
+  for (let i = i0; i <= i1; i++) {
+    if (disturbed[i]) continue;
+    ctx.fillStyle = '#5da34a';
+    ctx.fillRect(i * COLW, h[i], COLW + 0.6, 11);
+    ctx.fillStyle = '#74c25c';
+    ctx.fillRect(i * COLW, h[i], COLW + 0.6, 4);
+  }
+}
+
+function drawTrees() {
+  for (const tx of TREES) {
+    if (tx < camX - 80 || tx > camX + VW + 80) continue;
+    const gy = groundAt(tx);
+    ctx.fillStyle = '#7b5230';
+    ctx.fillRect(tx - 7, gy - 54, 14, 56);
+    ctx.fillStyle = '#4f9c40';
+    ctx.beginPath();
+    ctx.arc(tx, gy - 74, 34, 0, 7);
+    ctx.arc(tx - 26, gy - 58, 24, 0, 7);
+    ctx.arc(tx + 26, gy - 58, 24, 0, 7);
+    ctx.fill();
+  }
+}
+
+function rrect(x, y, w, hh, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + hh, r);
+  ctx.arcTo(x + w, y + hh, x, y + hh, r);
+  ctx.arcTo(x, y + hh, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function limb(a, b, w, fill) {
+  const ang = Math.atan2(b.y - a.y, b.x - a.x);
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  ctx.save();
+  ctx.translate(a.x, a.y); ctx.rotate(ang);
+  ctx.fillStyle = fill; ctx.strokeStyle = '#7d5c05'; ctx.lineWidth = 2.5;
+  rrect(-w / 2, -w / 2, len + w, w, w / 2.4);
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = '#5c4a10';
+  [a, b].forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, 4.5, 0, 7); ctx.fill(); });
+}
+
+// The operator, drawn inside the cab glass. Everything is proportional to the
+// window so the cab can be resized without redrawing him by hand. He is drawn
+// facing +x; the outer facing flip in drawExcavator turns him around with the
+// machine, so he always looks the way he is driving.
+function drawDriver(gx, gy, gw, gh) {
+  const cx = gx + gw * 0.55;        // sits toward the front of the cab
+  const hy = gy + gh * 0.40;        // head centre
+  const r  = gh * 0.24;             // head radius
+
+  // seat back behind him
+  ctx.fillStyle = '#4a4038';
+  rrect(cx - r * 2.5, hy - r * 1.1, r * 1.1, gh, r * 0.4); ctx.fill();
+
+  // torso in a hi-vis vest
+  ctx.fillStyle = '#ff8a3d';
+  ctx.beginPath();
+  ctx.ellipse(cx - r * 0.2, hy + r * 2.1, r * 1.62, r * 1.3, 0, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(cx - r * 1.82, hy + r * 2.05, r * 3.24, gh);
+  ctx.fillStyle = 'rgba(255,255,255,.7)';           // reflective stripe
+  ctx.fillRect(cx - r * 1.3, hy + r * 1.95, r * 2.6, r * 0.22);
+
+  // neck, mostly hidden by the chin so it reads as depth, not a patch
+  ctx.fillStyle = '#e0ac82';
+  rrect(cx - r * 0.32, hy + r * 0.5, r * 0.64, r * 0.72, r * 0.2); ctx.fill();
+
+  // head
+  ctx.fillStyle = '#f4c9a2';
+  ctx.beginPath(); ctx.arc(cx, hy, r, 0, 7); ctx.fill();
+  ctx.fillStyle = '#e8b58c';                        // ear
+  ctx.beginPath(); ctx.arc(cx - r * 0.92, hy + r * 0.12, r * 0.24, 0, 7); ctx.fill();
+
+  // ball cap: crown, brim pointing forward, button on top
+  ctx.fillStyle = '#2f6fd0';
+  ctx.beginPath();
+  ctx.arc(cx - r * 0.04, hy - r * 0.1, r * 1.06, Math.PI, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx + r * 0.92, hy - r * 0.4, r * 0.8, r * 0.22, -0.1, 0, 7);
+  ctx.fill();
+  ctx.fillStyle = '#5a94e8';
+  ctx.beginPath(); ctx.arc(cx - r * 0.04, hy - r * 1.12, r * 0.15, 0, 7); ctx.fill();
+
+  // face
+  ctx.fillStyle = '#f6a58f';                        // cheek
+  ctx.beginPath(); ctx.arc(cx - r * 0.28, hy + r * 0.46, r * 0.22, 0, 7); ctx.fill();
+  ctx.fillStyle = '#3a2a1c';                        // eye
+  ctx.beginPath(); ctx.arc(cx + r * 0.5, hy + r * 0.14, r * 0.16, 0, 7); ctx.fill();
+  ctx.strokeStyle = '#3a2a1c';                      // grin
+  ctx.lineWidth = Math.max(1, r * 0.15);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.28, hy + r * 0.4, r * 0.4, Math.PI * 0.1, Math.PI * 0.8);
+  ctx.stroke();
+}
+
+function drawTruck() {
+  const T = TRUCK;
+  if (T.rampX1 + 90 < camX || T.cabX0 - 90 > camX + VW) return;
+
+  const deckTop = T.deckY, deckBot = T.deckY + 13;
+  const frameTop = deckBot, frameBot = deckBot + 12;
+  const wheels = [102, 320, 386];
+
+  // ---- ramp, drawn first so the deck edge laps over its top end
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(T.deckX1 - 4, deckTop);
+  ctx.lineTo(T.rampX1, GROUND_Y);
+  ctx.lineTo(T.rampX1, GROUND_Y + 2.5);        // tapers to a lip on the ground
+  ctx.lineTo(T.deckX1 - 4, deckTop + 13);
+  ctx.closePath();
+  ctx.fillStyle = '#79808b'; ctx.fill();
+  ctx.strokeStyle = '#4a4f57'; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.clip();
+  ctx.fillStyle = 'rgba(240,192,32,.85)';           // grip bars
+  const rl = Math.hypot(T.rampX1 - T.deckX1, GROUND_Y - deckTop);
+  ctx.translate(T.deckX1 - 4, deckTop);
+  ctx.rotate(Math.atan2(GROUND_Y - deckTop, T.rampX1 - T.deckX1 + 4));
+  for (let d = 10; d < rl; d += 30) ctx.fillRect(d, 1, 13, 5);
+  ctx.restore();
+
+  // ---- wheels
+  ctx.fillStyle = '#23272c';
+  for (const wx of wheels) { ctx.beginPath(); ctx.arc(wx, GROUND_Y - 21, 21, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#9aa1a9';
+  for (const wx of wheels) { ctx.beginPath(); ctx.arc(wx, GROUND_Y - 21, 8.5, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#6d747c';
+  for (const wx of wheels) { ctx.beginPath(); ctx.arc(wx, GROUND_Y - 21, 3, 0, 7); ctx.fill(); }
+
+  // ---- chassis rail
+  ctx.fillStyle = '#3c4148';
+  ctx.fillRect(T.cabX0 + 8, frameTop, T.deckX1 - T.cabX0 - 8, frameBot - frameTop);
+
+  // ---- deck
+  ctx.fillStyle = '#8a929c';
+  rrect(T.deckX0 - 8, deckTop, T.deckX1 - T.deckX0 + 12, 13, 3); ctx.fill();
+  ctx.strokeStyle = '#666d76'; ctx.lineWidth = 1.5;
+  for (let x = T.deckX0 + 12; x < T.deckX1 - 6; x += 28) {
+    ctx.beginPath(); ctx.moveTo(x, deckTop + 2.5); ctx.lineTo(x, deckTop + 10.5); ctx.stroke();
+  }
+
+  // ---- headboard behind the truck cab
+  ctx.fillStyle = '#c9302f'; ctx.strokeStyle = '#8f2020'; ctx.lineWidth = 2.5;
+  rrect(T.deckX0 - 6, deckTop - 44, 13, 46, 3); ctx.fill(); ctx.stroke();
+
+  // ---- truck cab, facing left
+  const cy0 = GROUND_Y - 126, cy1 = frameBot;
+  ctx.fillStyle = '#d83a3a'; ctx.strokeStyle = '#8f2020'; ctx.lineWidth = 3;
+  rrect(T.cabX0, cy0, T.cabX1 - T.cabX0, cy1 - cy0, 11); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#bfe9ff';
+  rrect(T.cabX0 + 9, cy0 + 11, 52, 36, 6); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  ctx.beginPath();
+  ctx.moveTo(T.cabX0 + 11, cy0 + 47); ctx.lineTo(T.cabX0 + 34, cy0 + 11);
+  ctx.lineTo(T.cabX0 + 46, cy0 + 11); ctx.lineTo(T.cabX0 + 23, cy0 + 47);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#9aa1a9';                        // bumper
+  rrect(T.cabX0 - 6, cy1 - 18, 14, 18, 3); ctx.fill();
+  ctx.fillStyle = '#ffe27a';                        // headlight
+  ctx.beginPath(); ctx.arc(T.cabX0 + 8, cy0 + 62, 6, 0, 7); ctx.fill();
+  ctx.fillStyle = '#4a4a4a';                        // stack
+  ctx.fillRect(T.cabX1 - 12, cy0 - 16, 7, 20);
+}
+
+/* ------------------------------------------------------------- dump truck */
+// The bucket only loads the truck when it is tipping out over the open bed.
+function bucketOverBed(tip) {
+  if (DTRUCK.state !== 'parked' || DTRUCK.fill >= 1) return false;
+  // generous window: a 4-year-old will not line this up precisely, and it works
+  // from either side of the truck. The bucket must still be raised above the
+  // bed wall, so "lift it over the side" is the thing being taught.
+  return tip.x > DTRUCK.x - 95 && tip.x < DTRUCK.x + 22
+      && tip.y < DTRUCK.y - 28 && tip.y > DTRUCK.y - 165;
+}
+
+function updateDumpTruck(dt) {
+  const T = DTRUCK;
+
+  // rides the ground, so digging underneath lowers it instead of leaving it afloat
+  let top = 1e9;
+  for (let dx = -72; dx <= 68; dx += 8) top = Math.min(top, surfaceAt(T.x + dx));
+  T.y = lerp(T.y, top, 1 - Math.pow(0.0008, dt));
+
+  switch (T.state) {
+    case 'parked':
+      if (T.fill >= 1) {
+        T.wait += dt;                       // beat so the kid sees it fill up
+        if (T.wait > 0.7) { T.wait = 0; T.state = 'hauling'; playTruckHorn(); }
+      }
+      break;
+
+    case 'hauling':
+      T.x = Math.min(DT_AWAY, T.x + 200 * dt);
+      if (T.x >= DT_AWAY) { T.state = 'tipping'; playTipRumble(); }
+      break;
+
+    case 'tipping':
+      T.tip = Math.min(1, T.tip + dt * 0.85);
+      if (T.tip > 0.3 && T.fill > 0) {
+        const give = Math.min(T.fill, 0.85 * dt);
+        T.fill -= give;
+        drop({ x: T.x - 98, y: T.y - 40 }, give * DUMP_CAP, 58);
+      }
+      if (T.tip >= 1 && T.fill <= 0.002) { T.fill = 0; T.state = 'lowering'; playSettle(); }
+      break;
+
+    case 'lowering':
+      T.tip = Math.max(0, T.tip - dt * 1.1);
+      if (T.tip <= 0) T.state = 'returning';
+      break;
+
+    case 'returning':
+      T.x = Math.max(DT_HOME, T.x - 200 * dt);
+      if (T.x <= DT_HOME) { T.x = DT_HOME; T.state = 'parked'; }
+      break;
+  }
+}
+
+function drawDumpTruck() {
+  const T = DTRUCK, gy = T.y;
+  if (T.x + 160 < camX || T.x - 160 > camX + VW) return;
+
+  ctx.fillStyle = 'rgba(0,0,0,.16)';
+  ctx.beginPath(); ctx.ellipse(T.x - 4, gy - 1, 86, 8, 0, 0, 7); ctx.fill();
+
+  const wheelsAt = [-54, -16, 50];
+  ctx.fillStyle = '#23272c';
+  for (const dx of wheelsAt) { ctx.beginPath(); ctx.arc(T.x + dx, gy - 18, 18, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#9aa1a9';
+  for (const dx of wheelsAt) { ctx.beginPath(); ctx.arc(T.x + dx, gy - 18, 7, 0, 7); ctx.fill(); }
+
+  ctx.fillStyle = '#3c4148';                                  // chassis
+  ctx.fillRect(T.x - 78, gy - 44, 150, 12);
+
+  // ---- bed, pivoting about its rear bottom corner when it tips
+  ctx.save();
+  ctx.translate(T.x - 80, gy - 40);
+  ctx.rotate(-T.tip * 0.55);
+
+  if (T.fill > 0.01) {                                        // load inside
+    const fh = 36 * T.fill;
+    ctx.fillStyle = '#8b5a2f';
+    ctx.fillRect(8, -8 - fh, 80, fh);
+    ctx.fillStyle = '#9a6b41';
+    ctx.beginPath();
+    ctx.moveTo(8, -8 - fh);
+    ctx.quadraticCurveTo(48, -8 - fh - 13 * T.fill, 88, -8 - fh);
+    ctx.closePath(); ctx.fill();
+  }
+
+  ctx.fillStyle = '#e0913a'; ctx.strokeStyle = '#8f5a1c'; ctx.lineWidth = 2.5;
+  rrect(0, -8, 96, 8, 2); ctx.fill(); ctx.stroke();           // floor
+  rrect(0, -48, 9, 42, 2); ctx.fill(); ctx.stroke();          // rear wall
+  rrect(87, -48, 9, 42, 2); ctx.fill(); ctx.stroke();         // front wall
+  ctx.restore();
+
+  // ---- cab, facing right
+  ctx.fillStyle = '#3f8ecc'; ctx.strokeStyle = '#255f92'; ctx.lineWidth = 3;
+  rrect(T.x + 18, gy - 90, 56, 52, 10); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#bfe9ff';
+  rrect(T.x + 34, gy - 80, 34, 26, 5); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  ctx.beginPath();
+  ctx.moveTo(T.x + 36, gy - 54); ctx.lineTo(T.x + 52, gy - 80);
+  ctx.lineTo(T.x + 61, gy - 80); ctx.lineTo(T.x + 45, gy - 54);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#9aa1a9';
+  rrect(T.x + 70, gy - 52, 12, 16, 3); ctx.fill();            // bumper
+  ctx.fillStyle = '#ffe27a';
+  ctx.beginPath(); ctx.arc(T.x + 72, gy - 58, 5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#4a4a4a';
+  ctx.fillRect(T.x + 20, gy - 108, 6, 20);                    // stack
+}
+
+function drawExcavator() {
+  const P = armPoints(ex.arm);
+  ctx.save();
+  ctx.translate(ex.x, ex.y);
+  ctx.rotate(ex.rot);
+  ctx.scale(ex.facing, 1);
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,.18)';
+  ctx.beginPath(); ctx.ellipse(0, 2, RIG.trackW * 0.56, 9, 0, 0, 7); ctx.fill();
+
+  // ---- tracks
+  const tw = RIG.trackW, th = RIG.trackH;
+  ctx.fillStyle = '#3a3f45';
+  rrect(-tw / 2, -th, tw, th, th / 2); ctx.fill();
+  ctx.fillStyle = '#22262b';
+  const off = ((ex.tread * ex.facing) % 16 + 16) % 16;
+  ctx.save();
+  rrect(-tw / 2, -th, tw, th, th / 2); ctx.clip();
+  for (let x = -tw / 2 - 16 + off; x < tw / 2 + 16; x += 16) ctx.fillRect(x, -th, 6, th);
+  ctx.restore();
+  ctx.fillStyle = '#8b9199';
+  [-tw / 2 + 16, 0, tw / 2 - 16].forEach(x => {
+    ctx.beginPath(); ctx.arc(x, -th / 2, 8.5, 0, 7); ctx.fill();
+  });
+
+  // ---- house
+  ctx.fillStyle = '#ffc61a'; ctx.strokeStyle = '#8a6a05'; ctx.lineWidth = 3;
+  rrect(-RIG.houseW / 2 - 6, -th - RIG.houseH, RIG.houseW + 12, RIG.houseH, 10);
+  ctx.fill(); ctx.stroke();
+
+  // counterweight
+  ctx.fillStyle = '#e0a800';
+  rrect(-RIG.houseW / 2 - 10, -th - 34, 20, 30, 7); ctx.fill();
+
+  // ---- cab (a little bigger now, to make room for the driver)
+  const cabX = -20, cabY = -th - RIG.houseH - 54, cabW = 54, cabH = 58;
+  ctx.fillStyle = '#ffd748'; ctx.strokeStyle = '#8a6a05'; ctx.lineWidth = 3;
+  rrect(cabX, cabY, cabW, cabH, 11); ctx.fill(); ctx.stroke();
+
+  // glass, with the driver clipped inside it
+  const gx = cabX + 7, gy = cabY + 7, gw = cabW - 14, gh = cabH - 15;
+  ctx.save();
+  rrect(gx, gy, gw, gh, 7);
+  ctx.fillStyle = '#bfe9ff'; ctx.fill();
+  ctx.clip();
+  drawDriver(gx, gy, gw, gh);
+  ctx.restore();
+
+  // a thin streak of reflection across the glass, kept faint so he still reads
+  ctx.save();
+  rrect(gx, gy, gw, gh, 7); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.30)';
+  ctx.beginPath();
+  ctx.moveTo(gx - 4, gy + gh); ctx.lineTo(gx + gw * 0.42, gy - 4);
+  ctx.lineTo(gx + gw * 0.62, gy - 4); ctx.lineTo(gx + gw * 0.16, gy + gh);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // window frame
+  ctx.strokeStyle = '#8a6a05'; ctx.lineWidth = 2.5;
+  rrect(gx, gy, gw, gh, 7); ctx.stroke();
+
+  // exhaust stack, at the rear over the engine
+  ctx.fillStyle = '#4a4a4a';
+  ctx.fillRect(-36, -th - RIG.houseH - 16, 8, 18);
+  ctx.fillStyle = '#5f5f5f';
+  rrect(-38, -th - RIG.houseH - 20, 12, 6, 2.5); ctx.fill();
+
+  // ---- arm
+  limb(P.pivot, P.boomTip, 20, '#ffc61a');
+  limb(P.boomTip, P.stickTip, 16, '#ffd23c');
+
+  // ---- bucket
+  const a = P.ang.bucket;
+  ctx.save();
+  ctx.translate(P.stickTip.x, P.stickTip.y);
+  ctx.rotate(a);
+  const L = RIG.bucket;
+  ctx.beginPath();
+  ctx.moveTo(-4, -17);
+  ctx.lineTo(L + 4, -9);
+  ctx.lineTo(L + 6, 5);
+  ctx.quadraticCurveTo(L * 0.5, 22, -6, 12);
+  ctx.closePath();
+  ctx.fillStyle = '#e8a300'; ctx.strokeStyle = '#7d5c05'; ctx.lineWidth = 2.5;
+  ctx.fill(); ctx.stroke();
+  // teeth
+  ctx.fillStyle = '#5c4a10';
+  for (let i = 0; i < 3; i++) { ctx.fillRect(L + 2, -8 + i * 5, 8, 3.4); }
+  // dirt in the bucket
+  if (ex.load > 30) {
+    const f = Math.min(1, ex.load / CAPACITY);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(-4, -17); ctx.lineTo(L + 4, -9); ctx.lineTo(L + 6, 5);
+    ctx.quadraticCurveTo(L * 0.5, 22, -6, 12); ctx.closePath();
+    ctx.clip();
+    ctx.fillStyle = '#8b5a2f';
+    ctx.fillRect(-8, 20 - 34 * f, L + 20, 40);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  ctx.restore();
+}
+
+function render() {
+  // camera follows with a deadzone
+  const want = ex.x - VW * 0.42;
+  camX = lerp(camX, Math.max(0, Math.min(WORLD_W - VW, want)), 0.07);
+
+  ctx.setTransform(cv.width / innerWidth, 0, 0, cv.height / innerHeight, 0, 0);
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  ctx.save();
+  ctx.scale(scale, scale);
+  ctx.translate(-camX, 0);
+
+  drawSky();
+  drawBackWall();
+  drawTrees();
+  drawTerrain();
+  drawTruck();
+  drawDumpTruck();
+  drawExcavator();
+  drawPuffs();
+
+  ctx.restore();
+}
+
+/* ------------------------------------------------------------------ loop */
+let prev = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - prev) / 1000);
+  prev = now;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+lastInput = performance.now();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
