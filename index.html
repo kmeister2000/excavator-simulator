@@ -53,11 +53,56 @@
   #horn svg { width:44px; height:44px; }
   #horn.held { transform:translateY(5px); box-shadow:0 1px 0 #a82b2b, 0 3px 8px rgba(0,0,0,.28); }
 
+  #menu {
+    position:fixed; inset:0; z-index:40; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:22px;
+    background:linear-gradient(#5fa8e0,#bfe0f2);
+  }
+  #menu.gone { display:none; }
+  #menu h1 {
+    font:800 clamp(24px,5vw,44px)/1 system-ui,-apple-system,sans-serif;
+    color:#fff; text-shadow:0 3px 0 rgba(0,0,0,.22); letter-spacing:.5px;
+  }
+  #cards { display:flex; gap:clamp(12px,3vw,28px); flex-wrap:wrap; justify-content:center; padding:0 14px; }
+  .card {
+    width:clamp(170px,26vw,250px); border:none; padding:0; cursor:pointer;
+    background:#fff; border-radius:22px; overflow:hidden; touch-action:none;
+    box-shadow:0 8px 0 rgba(0,0,0,.22), 0 14px 26px rgba(0,0,0,.28);
+    transition:transform .09s, box-shadow .09s;
+  }
+  .card:active { transform:translateY(6px); box-shadow:0 2px 0 rgba(0,0,0,.22), 0 6px 12px rgba(0,0,0,.28); }
+  .card svg { display:block; width:100%; height:auto; }
+  .card span {
+    display:block; padding:9px 6px 12px;
+    font:700 clamp(13px,1.6vw,17px)/1.2 system-ui,-apple-system,sans-serif; color:#3d2a05;
+  }
+
+  #tasks {
+    position:fixed; z-index:12; top:max(10px, env(safe-area-inset-top)); left:50%;
+    transform:translateX(-50%); display:flex; gap:10px;
+  }
+  .task {
+    width:52px; height:52px; border-radius:15px; background:rgba(0,0,0,.32);
+    border:3px solid rgba(255,255,255,.75);
+    display:flex; align-items:center; justify-content:center; color:#fff;
+  }
+  .task svg { width:30px; height:30px; }
+  .task.done { background:#3da34d; border-color:#fff; }
+
+  #home {
+    position:fixed; z-index:11; top:max(14px, env(safe-area-inset-top));
+    right:calc(max(14px, env(safe-area-inset-right)) + 96px);
+    width:64px; height:64px; border-radius:50%; background:#5b6570; color:#fff;
+    box-shadow:0 5px 0 #3a424b, 0 7px 14px rgba(0,0,0,.28);
+  }
+  #home svg { width:34px; height:34px; }
+  #home:active { transform:translateY(4px); box-shadow:0 1px 0 #3a424b; }
+
   #paints {
     position:fixed; z-index:11; display:flex; gap:7px; flex-wrap:wrap;
-    top:max(10px, env(safe-area-inset-top));
+    top:calc(max(10px, env(safe-area-inset-top)) + 62px);
     left:max(10px, env(safe-area-inset-left));
-    max-width:calc(100vw - 130px);
+    max-width:calc(100vw - 24px);
   }
   .swatch {
     width:44px; height:44px; border-radius:50%; border:3px solid rgba(255,255,255,.9);
@@ -75,7 +120,9 @@
 
   @media (max-height: 460px) {
     .swatch { width:36px; height:36px; font-size:14px; border-width:2px; }
-    #paints { gap:5px; }
+    #paints { gap:5px; top:calc(max(8px, env(safe-area-inset-top)) + 52px); }
+    .task { width:44px; height:44px; border-radius:13px; }
+    .task svg { width:25px; height:25px; }
   }
 
   @keyframes hint { 0%,100% { transform:scale(1); } 50% { transform:scale(1.09); } }
@@ -91,6 +138,16 @@
 </head>
 <body>
 <canvas id="game" tabindex="0"></canvas>
+
+<div id="tasks"></div>
+<button id="home" aria-label="choose another site">
+  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3 2 12h3v9h6v-6h2v6h6v-9h3z"/></svg>
+</button>
+
+<div id="menu">
+  <h1>Pick a Job</h1>
+  <div id="cards"></div>
+</div>
 
 <div id="paints"></div>
 
@@ -133,22 +190,26 @@ const disturbed = new Uint8Array(COLS);    // 1 = grass has been destroyed
 
 const colAt = x => Math.max(0, Math.min(COLS - 1, Math.floor(x / COLW)));
 
-for (let i = 0; i < COLS; i++) {
-  const x = i * COLW;
-  h[i] = GROUND_Y
-       + Math.sin(x * 0.0016) * 7
-       + Math.sin(x * 0.0051 + 1.3) * 4;
-}
-
-// a mound to dig in most spans, so there is always something to work on
-for (let b = 0; b * BIOME_W < WORLD_W; b++) {
-  if (rnd(b + 400) < 0.3) continue;
-  const cx = b * BIOME_W + 420 + rnd(b + 11) * 680;
-  const r  = 130 + rnd(b + 5) * 90;
-  const amp = 40 + rnd(b + 9) * 32;
-  for (let i = colAt(cx - r); i <= colAt(cx + r); i++) {
-    const d = Math.abs(i * COLW - cx);
-    if (d < r) h[i] -= Math.cos(d / r * Math.PI / 2) * amp;
+// Terrain generation is a function now, because each job site rebuilds it.
+function generateTerrain(mounds) {
+  for (let i = 0; i < COLS; i++) {
+    const x = i * COLW;
+    h[i] = GROUND_Y
+         + Math.sin(x * 0.0016) * 7
+         + Math.sin(x * 0.0051 + 1.3) * 4;
+    disturbed[i] = 0;
+  }
+  if (mounds === false) return;
+  // a mound to dig in most spans, so there is always something to work on
+  for (let b = 0; b * BIOME_W < WORLD_W; b++) {
+    if (rnd(b + 400) < 0.3) continue;
+    const cx = b * BIOME_W + 420 + rnd(b + 11) * 680;
+    const r  = 130 + rnd(b + 5) * 90;
+    const amp = 40 + rnd(b + 9) * 32;
+    for (let i = colAt(cx - r); i <= colAt(cx + r); i++) {
+      const d = Math.abs(i * COLW - cx);
+      if (d < r) h[i] -= Math.cos(d / r * Math.PI / 2) * amp;
+    }
   }
 }
 
@@ -163,10 +224,17 @@ const TRUCK = {
 };
 const NO_DIG_X = TRUCK.rampX1 + 25;   // keep the ramp foot from being undermined
 
-// flatten the ground the truck parks on so the ramp meets it cleanly
-for (let i = 0; i <= colAt(NO_DIG_X + 30); i++) { h[i] = GROUND_Y; disturbed[i] = 0; }
+const h0 = new Float32Array(COLS);  // original ground line, for the cut-away back wall
 
-const h0 = Float32Array.from(h);   // original ground line, for the cut-away back wall
+// flatten the ground the truck parks on so the ramp meets it cleanly, then
+// snapshot the result as the untouched profile
+function finishTerrain() {
+  for (let i = 0; i <= colAt(NO_DIG_X + 30); i++) { h[i] = GROUND_Y; disturbed[i] = 0; }
+  h0.set(h);
+}
+
+generateTerrain(true);
+finishTerrain();
 
 
 const groundAt = x => h[colAt(x)];
@@ -360,6 +428,28 @@ addEventListener('keydown', e => {
   keys[k] = true; lastInput = performance.now(); audioStart();
 });
 addEventListener('keyup', e => { const k = actionFor(e); if (k) keys[k] = false; });
+
+// Keyboard events only reach the page once something in it holds focus, so on a
+// fresh load the arrow keys did nothing until an on-screen button had been
+// tapped. Claim focus straight away, and take it back whenever it is lost.
+const stage = document.getElementById('game');
+
+function grabFocus() {
+  try { window.focus(); } catch (_) {}
+  if (document.activeElement !== stage) stage.focus({ preventScroll: true });
+}
+
+grabFocus();
+addEventListener('load', grabFocus);
+addEventListener('pointerdown', grabFocus, true);
+stage.addEventListener('pointerover', grabFocus);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) grabFocus(); });
+
+// A key held while the window loses focus never sends its keyup, which would
+// otherwise leave the machine driving off on its own. Let go of everything.
+function releaseAll() { for (const k in keys) keys[k] = false; }
+addEventListener('blur', releaseAll);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 
 /* ----------------------------------------------------------- paint picker */
 // Digits arrive as key, code or keyCode just like the arrows do, and the
@@ -908,6 +998,15 @@ function update(dt) {
   updateDumpTruck(dt);
   updateDeer(dt);
   updateClods(dt);
+  updateBuilding(dt);
+
+  // job progress. Filling the dump truck counts wherever a site asks for it.
+  if (site) {
+    if (site.check) site.check();
+    const ti = tasks.findIndex(t => t.icon === 'truck' && !t.done);
+    if (ti >= 0 && DTRUCK.fill >= 1) taskDone(ti);
+  }
+  if (celebrateT >= 0) celebrateT += dt;
 
   settleMachine(dt);
 
@@ -1894,6 +1993,194 @@ function drawTruck() {
   ctx.fillRect(T.cabX1 - 12, cy0 - 16, 7, 20);
 }
 
+/* ------------------------------------------------------------- job sites */
+// Each site rebuilds the world and hands the excavator a short list of jobs.
+// Jobs are checked every frame and can only ever be completed, never failed.
+
+const PIT = { x0: 1150, x1: 1560, depth: GROUND_Y + 74 };   // foundation footprint
+
+// The building to knock down. It takes damage wherever the bucket touches it,
+// then folds over and becomes a pile of rubble on the ground.
+const BUILDING = {
+  x: 1300, w: 210, h: 190,
+  hp: 1, fall: 0, down: false, cleared: false, shake: 0
+};
+
+let site = null;                    // the active site definition
+let tasks = [];                     // [{ icon, done }]
+let celebrateT = -1;
+
+function taskDone(i) {
+  if (tasks[i] && !tasks[i].done) {
+    tasks[i].done = true;
+    playFanfare(tasks.every(t => t.done));
+    renderTasks();
+    if (tasks.every(t => t.done)) celebrateT = 0;
+  }
+}
+
+const SITES = {
+  sandpit: {
+    name: 'Free Digging',
+    build() { generateTerrain(true); },
+    tasks: []
+  },
+
+  tour: {
+    name: 'Go and See the Land',
+    build() { generateTerrain(true); },
+    // Sightseeing badges. Driving into each kind of country earns one, so the
+    // reward is for looking around rather than for digging.
+    tasks: [{ icon: 'farm' }, { icon: 'forest' }, { icon: 'river' },
+            { icon: 'yard' }, { icon: 'ocean' }],
+    check() {
+      const here = biomeAt(ex.x);
+      const i = tasks.findIndex(t => t.icon === here && !t.done);
+      if (i >= 0) taskDone(i);
+    }
+  },
+
+  foundation: {
+    name: 'Dig the Foundation',
+    build() {
+      generateTerrain(true);
+      // clear the footprint so the outline sits on flat ground
+      for (let i = colAt(PIT.x0 - 120); i <= colAt(PIT.x1 + 120); i++) h[i] = GROUND_Y;
+    },
+    tasks: [{ icon: 'pit' }, { icon: 'truck' }],
+    check() {
+      if (!tasks[0].done) {
+        let deep = true;
+        for (let x = PIT.x0; x <= PIT.x1; x += 20) if (groundAt(x) < PIT.depth) { deep = false; break; }
+        if (deep) taskDone(0);
+      }
+    }
+  },
+
+  demolition: {
+    name: 'Knock It Down',
+    build() {
+      generateTerrain(false);
+      BUILDING.hp = 1; BUILDING.fall = 0; BUILDING.down = false;
+      BUILDING.cleared = false; BUILDING.shake = 0;
+    },
+    tasks: [{ icon: 'smash' }, { icon: 'truck' }],
+    check() {
+      if (!tasks[0].done && BUILDING.down && BUILDING.fall >= 1) taskDone(0);
+    }
+  }
+};
+
+// ---- the building ---------------------------------------------------------
+function updateBuilding(dt) {
+  if (!site || site !== SITES.demolition) return;
+  const B = BUILDING;
+  B.shake = Math.max(0, B.shake - dt * 4);
+
+  if (!B.down) {
+    const tip = toWorld(armPoints(ex.arm).tip);
+    const inside = tip.x > B.x - B.w / 2 - 6 && tip.x < B.x + B.w / 2 + 6
+                && tip.y > GROUND_Y - B.h && tip.y < GROUND_Y;
+    const swinging = Math.abs(prevTip ? tip.y - prevTip.y : 0) + Math.abs(ex.vx * dt) > 0.7;
+    if (inside && swinging) {
+      B.hp = Math.max(0, B.hp - dt * 0.55);
+      B.shake = 1;
+      if (Math.random() < 0.4) {
+        spawnClod(tip.x + (Math.random() - 0.5) * 60, GROUND_Y - B.h * Math.random(),
+                  40, (Math.random() - 0.5) * 90, -120 - Math.random() * 90);
+      }
+      playCrunch();
+      if (B.hp <= 0) { B.down = true; playTipRumble(); }
+    }
+  } else if (B.fall < 1) {
+    B.fall = Math.min(1, B.fall + dt * 0.55);
+    if (Math.random() < 0.5) {
+      spawnClod(B.x + (Math.random() - 0.5) * B.w, GROUND_Y - B.h * (1 - B.fall) * Math.random(),
+                90, (Math.random() - 0.5) * 130, -60 - Math.random() * 80);
+    }
+    if (B.fall >= 1 && !B.cleared) {          // becomes a real pile of rubble
+      B.cleared = true;
+      for (let k = 0; k < 26; k++) {
+        drop({ x: B.x + (Math.random() - 0.5) * B.w * 1.15, y: GROUND_Y }, 900, 48);
+      }
+    }
+  }
+}
+
+function drawBuilding() {
+  if (!site || site !== SITES.demolition || BUILDING.fall >= 1) return;
+  const B = BUILDING, f = B.fall;
+  const sx = B.shake * (Math.random() - 0.5) * 5;
+
+  ctx.save();
+  ctx.translate(B.x + sx, GROUND_Y);
+  ctx.rotate(f * 0.5);
+  ctx.scale(1, 1 - f * 0.55);
+
+  const w = B.w, hh = B.h;
+  ctx.fillStyle = mix('#c9b79a', '#000000', (1 - B.hp) * 0.25);
+  ctx.strokeStyle = '#8d7c63'; ctx.lineWidth = 3;
+  ctx.fillRect(-w / 2, -hh, w, hh);
+  ctx.strokeRect(-w / 2, -hh, w, hh);
+
+  ctx.fillStyle = '#6f6250';                                   // roof parapet
+  ctx.fillRect(-w / 2 - 8, -hh - 12, w + 16, 14);
+
+  for (let r = 0; r < 4; r++) {                                // windows
+    for (let c = 0; c < 3; c++) {
+      const wx = -w / 2 + 22 + c * (w - 60) / 2, wy = -hh + 24 + r * (hh - 44) / 4;
+      ctx.fillStyle = (r * 3 + c) % 4 === 1 ? '#5b6b78' : '#8fa6b5';
+      ctx.fillRect(wx, wy, 34, 26);
+      ctx.strokeStyle = '#7d6f5a'; ctx.lineWidth = 2;
+      ctx.strokeRect(wx, wy, 34, 26);
+    }
+  }
+  ctx.fillStyle = '#6b5a44';                                   // door
+  ctx.fillRect(-18, -42, 36, 42);
+
+  // cracks spreading as it takes damage
+  const dmg = 1 - B.hp;
+  if (dmg > 0.05) {
+    ctx.strokeStyle = 'rgba(60,45,30,' + (0.35 + dmg * 0.5) + ')';
+    ctx.lineWidth = 2 + dmg * 2;
+    for (let k = 0; k < Math.ceil(dmg * 7); k++) {
+      const bx = -w / 2 + ((k * 71) % w), by = -hh + ((k * 53) % hh);
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx + 16 - (k % 3) * 12, by + 30 + (k % 4) * 10);
+      ctx.lineTo(bx + 4 + (k % 2) * 14, by + 62 + (k % 3) * 12);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// ---- the foundation outline ----------------------------------------------
+function drawPitMarker() {
+  if (!site || site !== SITES.foundation || tasks[0].done) return;
+  ctx.save();
+  ctx.setLineDash([13, 9]);
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = 'rgba(255,255,255,.9)';
+  ctx.beginPath();
+  ctx.moveTo(PIT.x0, GROUND_Y - 26);
+  ctx.lineTo(PIT.x0, PIT.depth);
+  ctx.lineTo(PIT.x1, PIT.depth);
+  ctx.lineTo(PIT.x1, GROUND_Y - 26);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // shade whatever is still left to dig out
+  ctx.fillStyle = 'rgba(255,255,255,.16)';
+  ctx.beginPath();
+  ctx.moveTo(PIT.x0, PIT.depth);
+  for (let x = PIT.x0; x <= PIT.x1; x += 10) ctx.lineTo(x, Math.min(groundAt(x), PIT.depth));
+  ctx.lineTo(PIT.x1, PIT.depth);
+  ctx.closePath(); ctx.fill();
+
+  ctx.restore();
+}
+
 /* ------------------------------------------------------------- dump truck */
 // The bucket only loads the truck when it is tipping out over the open bed.
 function bucketOverBed(tip) {
@@ -2215,13 +2502,163 @@ function render() {
   drawBackWall();
   drawTrees();
   drawTerrain();
+  drawPitMarker();
   drawTruck();
   drawDumpTruck();
+  drawBuilding();
   drawExcavator();
   drawClods();
   drawPuffs();
+  drawCelebration();
 
   ctx.restore();
+}
+
+
+/* ----------------------------------------------------------- site chooser */
+const SITE_ART = {
+  sandpit:
+    '<svg viewBox="0 0 200 120"><rect width="200" height="120" fill="#8fc9e8"/>' +
+    '<rect y="74" width="200" height="46" fill="#9a6b41"/><rect y="74" width="200" height="7" fill="#5da34a"/>' +
+    '<path d="M52 74q30-42 60 0z" fill="#7d5738"/>' +
+    '<rect x="118" y="52" width="46" height="16" rx="7" fill="#ffc61a" stroke="#8a6a05" stroke-width="3"/>' +
+    '<rect x="122" y="66" width="38" height="10" rx="5" fill="#31363d"/>' +
+    '<path d="M160 58 185 42" stroke="#ffc61a" stroke-width="8" stroke-linecap="round"/>' +
+    '<path d="M183 40l10 12-12 6z" fill="#e8a300"/></svg>',
+  foundation:
+    '<svg viewBox="0 0 200 120"><rect width="200" height="120" fill="#8fc9e8"/>' +
+    '<rect y="74" width="200" height="46" fill="#9a6b41"/><rect y="74" width="200" height="7" fill="#5da34a"/>' +
+    '<path d="M56 74h92v34H56z" fill="#6b4a30"/>' +
+    '<path d="M56 74v34h92V74" fill="none" stroke="#fff" stroke-width="4" stroke-dasharray="9 7"/>' +
+    '<rect x="14" y="50" width="44" height="16" rx="7" fill="#ffc61a" stroke="#8a6a05" stroke-width="3"/>' +
+    '<rect x="18" y="64" width="36" height="10" rx="5" fill="#31363d"/>' +
+    '<path d="M54 56 78 44" stroke="#ffc61a" stroke-width="8" stroke-linecap="round"/>' +
+    '<path d="M76 42l11 13-13 6z" fill="#e8a300"/></svg>',
+  tour:
+    '<svg viewBox="0 0 200 120"><rect width="200" height="120" fill="#8fc9e8"/>' +
+    '<path d="M0 62 40 26 78 62z" fill="#a6bad2"/><path d="M62 62 104 22 146 62z" fill="#8ba3c1"/>' +
+    '<path d="M28 34 40 26 52 34 40 40z" fill="#eef4fb"/><path d="M92 32 104 22 116 32 104 38z" fill="#eef4fb"/>' +
+    '<path d="M130 62 172 30 200 62z" fill="#a6bad2"/>' +
+    '<rect y="62" width="200" height="14" fill="#7ea87a"/>' +
+    '<rect y="76" width="200" height="14" fill="#3a78ae"/>' +
+    '<rect y="90" width="200" height="30" fill="#9a6b41"/><rect y="90" width="200" height="6" fill="#5da34a"/>' +
+    '<circle cx="36" cy="58" r="9" fill="#5d9450"/><rect x="34" y="58" width="4" height="8" fill="#6b4a30"/>' +
+    '<circle cx="168" cy="56" r="8" fill="#5d9450"/><rect x="166" y="56" width="4" height="8" fill="#6b4a30"/>' +
+    '<rect x="86" y="66" width="44" height="16" rx="7" fill="#ffc61a" stroke="#8a6a05" stroke-width="3"/>' +
+    '<rect x="90" y="80" width="36" height="10" rx="5" fill="#31363d"/>' +
+    '<path d="M126 72 150 60" stroke="#ffc61a" stroke-width="8" stroke-linecap="round"/>' +
+    '<path d="M148 58l11 13-13 6z" fill="#e8a300"/></svg>',
+  demolition:
+    '<svg viewBox="0 0 200 120"><rect width="200" height="120" fill="#8fc9e8"/>' +
+    '<rect y="74" width="200" height="46" fill="#9a6b41"/><rect y="74" width="200" height="7" fill="#5da34a"/>' +
+    '<g transform="rotate(-9 128 74)"><rect x="98" y="18" width="62" height="56" fill="#c9b79a" stroke="#8d7c63" stroke-width="3"/>' +
+    '<rect x="106" y="26" width="17" height="14" fill="#8fa6b5"/><rect x="133" y="26" width="17" height="14" fill="#5b6b78"/>' +
+    '<rect x="106" y="50" width="17" height="14" fill="#5b6b78"/><rect x="133" y="50" width="17" height="14" fill="#8fa6b5"/></g>' +
+    '<path d="M150 70l14 6-6 10z" fill="#a08a6d"/><path d="M168 74l10 4-4 7z" fill="#a08a6d"/>' +
+    '<rect x="14" y="50" width="44" height="16" rx="7" fill="#ffc61a" stroke="#8a6a05" stroke-width="3"/>' +
+    '<rect x="18" y="64" width="36" height="10" rx="5" fill="#31363d"/>' +
+    '<path d="M54 56 82 40" stroke="#ffc61a" stroke-width="8" stroke-linecap="round"/>' +
+    '<path d="M80 38l11 13-13 6z" fill="#e8a300"/></svg>'
+};
+
+const TASK_ICON = {
+  pit:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 8h18"/><path d="M6 8v9h12V8"/><path d="M9 12v3M15 12v3"/></svg>',
+  smash: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 6 13h4l-1 9 8-12h-4z"/></svg>',
+  truck: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 7h11v8H2zM14 10h4l3 3v2h-7z"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
+  farm:  '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 10 12 4l9 6v10H3z"/><path d="M10 20v-6h4v6z" fill="#3da34d"/></svg>',
+  forest:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 5 12h4l-4 6h14l-4-6h4z"/><rect x="11" y="18" width="2" height="4"/></svg>',
+  river: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M2 9q4-3 7 0t7 0 6-1"/><path d="M2 15q4-3 7 0t7 0 6-1"/></svg>',
+  yard:  '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3 20 20H4z"/><rect x="7" y="13" width="10" height="2.6" fill="#fff"/></svg>',
+  ocean: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 12c3-5 7-5 10 0 1.6 2.7 4 2.4 6-1v6H4z"/><path d="M17 4l4 3-4 3z"/></svg>',
+  tick:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>'
+};
+
+const menuEl = document.getElementById('menu');
+const cardsEl = document.getElementById('cards');
+const tasksEl = document.getElementById('tasks');
+
+function renderTasks() {
+  tasksEl.innerHTML = '';
+  tasks.forEach(t => {
+    const d = document.createElement('div');
+    d.className = 'task' + (t.done ? ' done' : '');
+    d.innerHTML = t.done ? TASK_ICON.tick : TASK_ICON[t.icon];
+    tasksEl.appendChild(d);
+  });
+}
+
+function startSite(id) {
+  site = SITES[id];
+  tasks = site.tasks.map(t => ({ icon: t.icon, done: false }));
+  celebrateT = -1;
+
+  site.build();
+  finishTerrain();
+
+  ex.x = 290; ex.y = TRUCK.deckY; ex.vx = 0; ex.vy = 0;
+  ex.rot = 0; ex.rotV = 0; ex.lean = 0; ex.leanV = 0;
+  ex.arm = 0; ex.load = 0; ex.dumpT = 0; ex.dumping = false; ex.facing = 1;
+  DTRUCK.x = DT_HOME; DTRUCK.fill = 0; DTRUCK.tip = 0; DTRUCK.state = 'parked'; DTRUCK.wait = 0;
+  clods.length = 0; puffs.length = 0;
+  deer.active = false; deer.lastBiome = -999;
+  camX = 0;
+  for (const k in keys) keys[k] = false;
+
+  renderTasks();
+  menuEl.classList.add('gone');
+  grabFocus();
+}
+
+Object.keys(SITES).forEach(id => {
+  const b = document.createElement('button');
+  b.className = 'card';
+  b.type = 'button';
+  b.innerHTML = SITE_ART[id] + '<span>' + SITES[id].name + '</span>';
+  b.addEventListener('pointerdown', e => { e.preventDefault(); audioStart(); startSite(id); });
+  cardsEl.appendChild(b);
+});
+
+document.getElementById('home').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  menuEl.classList.remove('gone');
+  tasksEl.innerHTML = '';
+  for (const k in keys) keys[k] = false;
+});
+
+// ---- rewards --------------------------------------------------------------
+function playFanfare(all) {
+  if (!AC) return;
+  const t = AC.currentTime;
+  const notes = all ? [523, 659, 784, 1047] : [659, 880];
+  notes.forEach((f, i) => {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = 'triangle'; o.frequency.value = f;
+    const at = t + i * 0.11;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.11, at + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.34);
+    o.connect(g); g.connect(AC.destination);
+    o.start(at); o.stop(at + 0.36);
+  });
+}
+
+const CONFETTI = ['#ffc61a', '#f4791f', '#d93b30', '#e8629c', '#8b5cc7', '#2f7fd4', '#3da34d'];
+
+function drawCelebration() {
+  if (celebrateT < 0 || celebrateT > 3.4) return;
+  const t = celebrateT;
+  for (let i = 0; i < 70; i++) {
+    const a = rnd(i) * 6.28, sp = 90 + rnd(i + 5) * 190;
+    const x = ex.x + Math.cos(a) * sp * t;
+    const y = ex.y - 120 + Math.sin(a) * sp * t + 190 * t * t;
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(t * 6 + i);
+    ctx.globalAlpha = Math.max(0, 1 - t / 3.4);
+    ctx.fillStyle = CONFETTI[i % CONFETTI.length];
+    ctx.fillRect(-4, -3, 8, 6);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
 }
 
 /* ------------------------------------------------------------------ loop */
