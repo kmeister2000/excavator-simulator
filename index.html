@@ -414,19 +414,6 @@ function playHorn() {
   });
 }
 
-let beepUntil = 0;
-function reverseBeep() {
-  if (!AC || AC.currentTime < beepUntil) return;
-  beepUntil = AC.currentTime + 0.62;
-  const t = AC.currentTime, g = AC.createGain();
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.13, t + 0.01);
-  g.gain.setValueAtTime(0.13, t + 0.18);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
-  const o = AC.createOscillator(); o.type = 'square'; o.frequency.value = 1180;
-  o.connect(g); g.connect(AC.destination); o.start(t); o.stop(t + 0.26);
-}
-
 let lastThud = 0;
 function playThud() {
   if (!AC || AC.currentTime - lastThud < 0.28) return;
@@ -759,7 +746,6 @@ function update(dt) {
     if (drive !== 0) ex.tread += drive * 46 * dt * (1 - grip);
   }
   if (drive !== 0) ex.facing = drive;
-  if (ex.vx < -6) reverseBeep();
 
   // arm
   const armMove = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
