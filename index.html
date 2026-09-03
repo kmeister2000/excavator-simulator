@@ -16,7 +16,7 @@
     -webkit-tap-highlight-color:transparent;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  #game { display:block; width:100%; height:100%; }
+  #game { display:block; width:100%; height:100%; outline:none; }
 
   .pad { position:fixed; bottom:max(14px, env(safe-area-inset-bottom)); display:flex; gap:14px; z-index:10; }
   #padL { left:max(14px, env(safe-area-inset-left)); }
@@ -65,20 +65,20 @@
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
+<canvas id="game" tabindex="0"></canvas>
 
 <div class="pad" id="padL">
-  <button class="btn" id="left" aria-label="drive left"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 3.5 7 12l8.5 8.5 2.6-2.6L12.2 12l5.9-5.9z"/></svg></button>
-  <button class="btn" id="right" aria-label="drive right"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 3.5 17 12l-8.5 8.5-2.6-2.6L11.8 12 5.9 6.1z"/></svg></button>
+  <button class="btn" id="left" tabindex="-1" aria-label="drive left"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 3.5 7 12l8.5 8.5 2.6-2.6L12.2 12l5.9-5.9z"/></svg></button>
+  <button class="btn" id="right" tabindex="-1" aria-label="drive right"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 3.5 17 12l-8.5 8.5-2.6-2.6L11.8 12 5.9 6.1z"/></svg></button>
 </div>
 
 <div class="pad" id="padR">
-  <button class="btn" id="up" aria-label="arm up"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5 3.5 13l2.6 2.6L12 9.7l5.9 5.9 2.6-2.6z"/></svg></button>
-  <button class="btn" id="down" aria-label="arm down"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 19.5 20.5 11l-2.6-2.6L12 14.3 6.1 8.4 3.5 11z"/></svg></button>
+  <button class="btn" id="up" tabindex="-1" aria-label="arm up"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5 3.5 13l2.6 2.6L12 9.7l5.9 5.9 2.6-2.6z"/></svg></button>
+  <button class="btn" id="down" tabindex="-1" aria-label="arm down"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 19.5 20.5 11l-2.6-2.6L12 14.3 6.1 8.4 3.5 11z"/></svg></button>
 </div>
 
-<button id="dump" aria-label="dump"></button>
-<button id="horn" aria-label="horn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 2.3v2.1a7.6 7.6 0 0 1 0 15.2v2.1a9.7 9.7 0 0 0 0-19.4z"/></svg></button>
+<button id="dump" tabindex="-1" aria-label="dump"></button>
+<button id="horn" tabindex="-1" aria-label="horn"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 4V5L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4zM14 2.3v2.1a7.6 7.6 0 0 1 0 15.2v2.1a9.7 9.7 0 0 0 0-19.4z"/></svg></button>
 
 <script>
 "use strict";
@@ -265,6 +265,27 @@ addEventListener('keydown', e => {
   e.preventDefault(); keys[k] = true; lastInput = performance.now(); audioStart();
 });
 addEventListener('keyup', e => { const k = KEYMAP[e.key]; if (k) keys[k] = false; });
+
+// Keyboard events only reach the page once something in it holds focus, so on a
+// fresh load the arrow keys did nothing until an on-screen button had been
+// tapped. Claim focus straight away, and take it back whenever it is lost.
+const stage = document.getElementById('game');
+
+function grabFocus() {
+  try { window.focus(); } catch (_) {}
+  if (document.activeElement !== stage) stage.focus({ preventScroll: true });
+}
+
+grabFocus();
+addEventListener('load', grabFocus);
+addEventListener('pointerdown', grabFocus, true);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) grabFocus(); });
+
+// A key held while the window loses focus never sends its keyup, which would
+// otherwise leave the machine driving off on its own. Let go of everything.
+function releaseAll() { for (const k in keys) keys[k] = false; }
+addEventListener('blur', releaseAll);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 
 // keep little fingers from navigating away
 addEventListener('gesturestart', e => e.preventDefault());
