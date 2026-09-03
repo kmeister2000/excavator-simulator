@@ -85,7 +85,24 @@
     width:52px; height:52px; border-radius:15px; background:rgba(0,0,0,.32);
     border:3px solid rgba(255,255,255,.75);
     display:flex; align-items:center; justify-content:center; color:#fff;
+    position:relative; touch-action:none; cursor:help;
   }
+  .task::after {
+    content:attr(data-label);
+    position:absolute; top:calc(100% + 9px); left:50%; transform:translateX(-50%) translateY(-3px);
+    background:rgba(20,22,26,.92); color:#fff; padding:7px 11px; border-radius:9px;
+    font:600 13px/1.2 system-ui,-apple-system,sans-serif; white-space:nowrap;
+    box-shadow:0 4px 12px rgba(0,0,0,.32);
+    opacity:0; pointer-events:none; transition:opacity .13s, transform .13s;
+  }
+  .task::before {
+    content:''; position:absolute; top:calc(100% + 2px); left:50%;
+    transform:translateX(-50%); border:6px solid transparent;
+    border-bottom-color:rgba(20,22,26,.92);
+    opacity:0; pointer-events:none; transition:opacity .13s;
+  }
+  .task:hover::after, .task.show::after { opacity:1; transform:translateX(-50%) translateY(0); }
+  .task:hover::before, .task.show::before { opacity:1; }
   .task svg { width:30px; height:30px; }
   .task.done { background:#3da34d; border-color:#fff; }
 
@@ -934,17 +951,17 @@ function update(dt) {
   if (keys.left)  drive -= 1;
   if (keys.right) drive += 1;
 
-  // Grade under the tracks. Climbing steeply costs grip until the grousers
-  // start to slip, which is self-correcting: slipping puts the machine back on
-  // ground it can hold, so it can never be stranded.
+  // Grade under the tracks. The grousers always bite - this machine will walk
+  // up anything, including the walls of a hole it dug itself, so a child can
+  // never park it somewhere it cannot get out of. A steep climb still makes
+  // the engine work, it just never costs traction.
   const slope = (surfaceAt(ex.x + 44) - surfaceAt(ex.x - 44)) / 88;
   const climbing = -slope * (drive || Math.sign(ex.vx) || 1);
-  let grip = 1;
-  if (climbing > 0.30) grip = Math.max(0.05, 1 - (climbing - 0.30) * 2.6);
-  ex.slip = drive !== 0 ? 1 - grip : 0;
+  const grip = 1;
+  ex.slip = drive !== 0 ? Math.max(0, Math.min(1, (climbing - 0.18) * 1.6)) : 0;
 
   // mass: it takes a moment to get 20 tonnes moving, and to stop it again
-  const want = drive * 132 * grip + (drive !== 0 ? slope * 46 : 0);
+  const want = drive * 132 * grip + (drive !== 0 ? Math.max(-38, Math.min(38, slope * 46)) : 0);
   const rate = drive !== 0 ? 3.4 : 6.0;
   const prevVx = ex.vx;
   ex.vx += (want - ex.vx) * Math.min(1, rate * dt);
@@ -2031,8 +2048,11 @@ const SITES = {
     build() { generateTerrain(true); },
     // Sightseeing badges. Driving into each kind of country earns one, so the
     // reward is for looking around rather than for digging.
-    tasks: [{ icon: 'farm' }, { icon: 'forest' }, { icon: 'river' },
-            { icon: 'yard' }, { icon: 'ocean' }],
+    tasks: [{ icon: 'farm',   label: 'Visit the farm' },
+            { icon: 'forest', label: 'Visit the forest' },
+            { icon: 'river',  label: 'Visit the river' },
+            { icon: 'yard',   label: 'Visit the building site' },
+            { icon: 'ocean',  label: 'Visit the sea' }],
     check() {
       const here = biomeAt(ex.x);
       const i = tasks.findIndex(t => t.icon === here && !t.done);
@@ -2047,7 +2067,8 @@ const SITES = {
       // clear the footprint so the outline sits on flat ground
       for (let i = colAt(PIT.x0 - 120); i <= colAt(PIT.x1 + 120); i++) h[i] = GROUND_Y;
     },
-    tasks: [{ icon: 'pit' }, { icon: 'truck' }],
+    tasks: [{ icon: 'pit',   label: 'Dig out the marked hole' },
+            { icon: 'truck', label: 'Fill up the dump truck' }],
     check() {
       if (!tasks[0].done) {
         let deep = true;
@@ -2064,7 +2085,8 @@ const SITES = {
       BUILDING.hp = 1; BUILDING.fall = 0; BUILDING.down = false;
       BUILDING.cleared = false; BUILDING.shake = 0;
     },
-    tasks: [{ icon: 'smash' }, { icon: 'truck' }],
+    tasks: [{ icon: 'smash', label: 'Knock the building down' },
+            { icon: 'truck', label: 'Fill up the dump truck' }],
     check() {
       if (!tasks[0].done && BUILDING.down && BUILDING.fall >= 1) taskDone(0);
     }
@@ -2583,13 +2605,23 @@ function renderTasks() {
     const d = document.createElement('div');
     d.className = 'task' + (t.done ? ' done' : '');
     d.innerHTML = t.done ? TASK_ICON.tick : TASK_ICON[t.icon];
+    const label = (t.done ? 'Done: ' : '') + (t.label || '');
+    d.dataset.label = label;
+    d.title = label;                       // for anything that reads the page
+    // touch screens have no hover, so a tap shows it for a moment instead
+    d.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      d.classList.add('show');
+      clearTimeout(d._t);
+      d._t = setTimeout(() => d.classList.remove('show'), 2200);
+    });
     tasksEl.appendChild(d);
   });
 }
 
 function startSite(id) {
   site = SITES[id];
-  tasks = site.tasks.map(t => ({ icon: t.icon, done: false }));
+  tasks = site.tasks.map(t => ({ icon: t.icon, label: t.label, done: false }));
   celebrateT = -1;
 
   site.build();
