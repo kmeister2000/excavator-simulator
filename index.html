@@ -258,13 +258,38 @@ const hornOff = () => hornEl.classList.remove('held');
 hornEl.addEventListener('pointerup', hornOff);
 hornEl.addEventListener('pointercancel', hornOff);
 
-const KEYMAP = { ArrowLeft:'left', ArrowRight:'right', ArrowUp:'up', ArrowDown:'down', ' ':'dump' };
+// A keyboard event can be identified three different ways, and not every
+// environment fills in all of them - some webviews and remote-input layers
+// deliver `code` but no `key`, older ones only `keyCode`. Matching on all
+// three means the arrow keys work wherever the event actually lands.
+const KEYMAP = {
+  ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+  ' ': 'dump', Spacebar: 'dump', Left: 'left', Right: 'right', Up: 'up', Down: 'down',
+  a: 'left', A: 'left', d: 'right', D: 'right',
+  w: 'up', W: 'up', s: 'down', S: 'down'
+};
+const CODEMAP = {
+  ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+  Space: 'dump', KeyA: 'left', KeyD: 'right', KeyW: 'up', KeyS: 'down'
+};
+const NUMMAP = {
+  37: 'left', 39: 'right', 38: 'up', 40: 'down', 32: 'dump',
+  65: 'left', 68: 'right', 87: 'up', 83: 'down'
+};
+
+function actionFor(e) {
+  return KEYMAP[e.key] || CODEMAP[e.code] || NUMMAP[e.keyCode || e.which] || null;
+}
+const isHorn = e => e.key === 'h' || e.key === 'H' || e.code === 'KeyH'
+                 || e.keyCode === 72 || e.which === 72;
+
 addEventListener('keydown', e => {
-  if (e.key === 'h') { audioStart(); playHorn(); return; }
-  const k = KEYMAP[e.key]; if (!k) return;
-  e.preventDefault(); keys[k] = true; lastInput = performance.now(); audioStart();
+  if (isHorn(e)) { if (!e.repeat) { audioStart(); playHorn(); } return; }
+  const k = actionFor(e); if (!k) return;
+  e.preventDefault();
+  keys[k] = true; lastInput = performance.now(); audioStart();
 });
-addEventListener('keyup', e => { const k = KEYMAP[e.key]; if (k) keys[k] = false; });
+addEventListener('keyup', e => { const k = actionFor(e); if (k) keys[k] = false; });
 
 // Keyboard events only reach the page once something in it holds focus, so on a
 // fresh load the arrow keys did nothing until an on-screen button had been
@@ -279,6 +304,7 @@ function grabFocus() {
 grabFocus();
 addEventListener('load', grabFocus);
 addEventListener('pointerdown', grabFocus, true);
+stage.addEventListener('pointerover', grabFocus);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) grabFocus(); });
 
 // A key held while the window loses focus never sends its keyup, which would
