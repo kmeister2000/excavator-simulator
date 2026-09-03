@@ -336,11 +336,12 @@ const ex = {
 const CAPACITY = 2600;
 let prevTip = null, wasContact = false, wasPouring = false, pourWentToBed = false;
 let T = 0;                                  // seconds, drives ambient animation
+let T2 = 0;                                 // same clock, for code where T is shadowed
 
 // The dump truck. Fill its bed from the excavator; when it is full it hauls the
 // load off, tips it into a pile, and comes back empty, so the loop never ends.
 const DUMP_CAP = CAPACITY * 3;          // three bucket loads
-const DT_HOME = 900, DT_AWAY = 1400;
+let DT_HOME = 900, DT_AWAY = 1400;   // set per job site
 const DTRUCK = {
   x: DT_HOME, y: GROUND_Y,
   fill: 0,        // 0..1
@@ -945,7 +946,7 @@ function settleMachine(dt) {
 
 /* ---------------------------------------------------------------- update */
 function update(dt) {
-  T += dt;
+  T += dt; T2 = T;
   // drive
   let drive = 0;
   if (keys.left)  drive -= 1;
@@ -2039,12 +2040,14 @@ function taskDone(i) {
 const SITES = {
   sandpit: {
     name: 'Free Digging',
+    truck: { home: 900, away: 1500 },
     build() { generateTerrain(true); },
     tasks: []
   },
 
   tour: {
     name: 'Go and See the Land',
+    truck: { home: 900, away: 1400 },
     build() { generateTerrain(true); },
     // Sightseeing badges. Driving into each kind of country earns one, so the
     // reward is for looking around rather than for digging.
@@ -2062,13 +2065,15 @@ const SITES = {
 
   foundation: {
     name: 'Dig the Foundation',
+    // parked right beside the footprint, so the dirt has somewhere obvious to go
+    truck: { home: 990, away: 1820 },
     build() {
       generateTerrain(true);
       // clear the footprint so the outline sits on flat ground
       for (let i = colAt(PIT.x0 - 120); i <= colAt(PIT.x1 + 120); i++) h[i] = GROUND_Y;
     },
     tasks: [{ icon: 'pit',   label: 'Dig out the marked hole' },
-            { icon: 'truck', label: 'Fill up the dump truck' }],
+            { icon: 'truck', label: 'Tip 3 buckets of dirt into the dump truck' }],
     check() {
       if (!tasks[0].done) {
         let deep = true;
@@ -2080,13 +2085,14 @@ const SITES = {
 
   demolition: {
     name: 'Knock It Down',
+    truck: { home: 1060, away: 1880 },
     build() {
       generateTerrain(false);
       BUILDING.hp = 1; BUILDING.fall = 0; BUILDING.down = false;
       BUILDING.cleared = false; BUILDING.shake = 0;
     },
     tasks: [{ icon: 'smash', label: 'Knock the building down' },
-            { icon: 'truck', label: 'Fill up the dump truck' }],
+            { icon: 'truck', label: 'Tip 3 buckets of dirt into the dump truck' }],
     check() {
       if (!tasks[0].done && BUILDING.down && BUILDING.fall >= 1) taskDone(0);
     }
@@ -2314,6 +2320,53 @@ function drawDumpTruck() {
   ctx.fillRect(T.x + 20, gy - 108, 6, 20);                    // stack
 }
 
+
+// Drawn after the machine, so the hint is never hidden behind its own bucket.
+function drawTruckGuidance() {
+  const T = DTRUCK, gy = T.y;
+  if (T.x + 160 < camX || T.x - 160 > camX + VW) return;
+
+  // ---- how full it is: one pip per bucket, so progress is visible
+  if (T.state === 'parked' || T.fill > 0) {
+    const loads = 3;
+    for (let k = 0; k < loads; k++) {
+      const px = T.x - 68 + k * 26, py = gy - 132;
+      const got = T.fill >= (k + 1) / loads - 0.02;
+      ctx.fillStyle = got ? '#ff8a3d' : 'rgba(0,0,0,.34)';
+      rrect(px, py, 20, 13, 5); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2;
+      rrect(px, py, 20, 13, 5); ctx.stroke();
+    }
+  }
+
+  // ---- tip it in here. Only shown while actually carrying something.
+  if (ex.load > 40 && T.state === 'parked' && T.fill < 1) {
+    const tip = toWorld(armPoints(ex.arm).tip);
+    const lined = bucketOverBed(tip);
+    const bob = Math.sin(T2 * 4) * 5;
+    const ax = T.x - 32, ay = gy - 112 + bob;
+
+    ctx.save();
+    ctx.globalAlpha = lined ? 1 : 0.82;
+    ctx.fillStyle = lined ? '#7fe07f' : '#ffd23c';
+    ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(ax - 17, ay); ctx.lineTo(ax + 17, ay); ctx.lineTo(ax, ay + 21);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+
+    if (lined) {                                  // the bed rim lights up
+      ctx.save();
+      ctx.strokeStyle = '#7fe07f'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(T.x - 80, gy - 88); ctx.lineTo(T.x - 71, gy - 88);
+      ctx.moveTo(T.x + 7, gy - 88); ctx.lineTo(T.x + 16, gy - 88);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
 function drawExcavator() {
   const P = armPoints(ex.arm);
   ctx.save();
@@ -2530,6 +2583,7 @@ function render() {
   drawBuilding();
   drawExcavator();
   drawClods();
+  drawTruckGuidance();
   drawPuffs();
   drawCelebration();
 
@@ -2630,6 +2684,7 @@ function startSite(id) {
   ex.x = 290; ex.y = TRUCK.deckY; ex.vx = 0; ex.vy = 0;
   ex.rot = 0; ex.rotV = 0; ex.lean = 0; ex.leanV = 0;
   ex.arm = 0; ex.load = 0; ex.dumpT = 0; ex.dumping = false; ex.facing = 1;
+  if (site.truck) { DT_HOME = site.truck.home; DT_AWAY = site.truck.away; }
   DTRUCK.x = DT_HOME; DTRUCK.fill = 0; DTRUCK.tip = 0; DTRUCK.state = 'parked'; DTRUCK.wait = 0;
   clods.length = 0; puffs.length = 0;
   deer.active = false; deer.lastBiome = -999;
