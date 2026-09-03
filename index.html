@@ -291,6 +291,41 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { const k = actionFor(e); if (k) keys[k] = false; });
 
+/* ------------------------------------------------------------ diagnostics */
+// Open the game with ?debug=1 to see whether key presses are reaching the page
+// at all. Costs nothing in normal play.
+if (location.search.indexOf('debug') !== -1) {
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'position:fixed;left:8px;top:8px;z-index:99;background:rgba(0,0,0,.85);color:#8f8;' +
+    'font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;padding:10px 12px;border-radius:8px;' +
+    'white-space:pre;pointer-events:none;max-width:70vw';
+  document.body.appendChild(panel);
+
+  const seen = [];
+  let count = 0;
+  function note(type, e) {
+    count++;
+    seen.unshift(type + ' key=' + JSON.stringify(e.key) + ' code=' + JSON.stringify(e.code) +
+                 ' keyCode=' + (e.keyCode || 0) + ' -> ' + (actionFor(e) || 'UNMAPPED'));
+    if (seen.length > 6) seen.pop();
+  }
+  addEventListener('keydown', e => note('down', e), true);
+  addEventListener('keyup',   e => note('up  ', e), true);
+  document.addEventListener('keydown', e => note('doc ', e), true);
+
+  setInterval(() => {
+    panel.textContent =
+      'key events received: ' + count + (count ? '' : '   <-- NONE have arrived') +
+      '\ndocument.hasFocus(): ' + document.hasFocus() +
+      '\nactiveElement: ' + (document.activeElement
+          ? (document.activeElement.id || document.activeElement.tagName) : 'none') +
+      '\nin an iframe: ' + (window.top !== window.self) +
+      '\nheld: [' + Object.keys(keys).filter(k => keys[k]).join(', ') + ']' +
+      (seen.length ? '\n\n' + seen.join('\n') : '');
+  }, 150);
+}
+
 // Keyboard events only reach the page once something in it holds focus, so on a
 // fresh load the arrow keys did nothing until an on-screen button had been
 // tapped. Claim focus straight away, and take it back whenever it is lost.
